@@ -1,0 +1,23 @@
+.DS_Store
+.build/
+.swiftpm/
+dist/
+
+# Local working files and generated review artifacts
+outputs/
+tmp/
+
+# KakaoTalk exports and local test attachments can contain personal data
+kakao-chats-limit-2000.json
+Resources/*
+!Resources/Info.plist
+
+# Runtime databases and backups must never be committed
+database.json
+database-*.json
+*backup*.json
+*.bak
+
+# Xcode/Swift user state
+*.xcuserstate
+xcuserdata/

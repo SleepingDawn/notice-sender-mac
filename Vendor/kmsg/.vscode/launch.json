@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:kmsg}",
+            "name": "Debug kmsg",
+            "target": "kmsg",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug kmsg"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:kmsg}",
+            "name": "Release kmsg",
+            "target": "kmsg",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release kmsg"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:kmsg}",
+            "name": "Debug VersionGenTool",
+            "target": "VersionGenTool",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug VersionGenTool"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:kmsg}",
+            "name": "Release VersionGenTool",
+            "target": "VersionGenTool",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release VersionGenTool"
+        }
+    ]
+}

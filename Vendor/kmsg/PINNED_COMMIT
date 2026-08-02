@@ -1,0 +1,10 @@
+Upstream: https://github.com/channprj/kmsg
+Commit: fb70208286a1da3a404861dc944db470176155f6
+Version: 1.260705.0
+
+Local safety patch:
+- exact room-title matching
+- unique search-result requirement
+- UI verification-only mode
+- forced-typing fallback disable switch
+- machine-readable success marker
