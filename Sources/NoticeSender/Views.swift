@@ -491,6 +491,14 @@ struct ClassesView: View {
                 HStack {
                     Text("반").font(.title.bold())
                     Spacer()
+                    Menu {
+                        Button("전체 반 JSON 내보내기") { exportClassArchive() }
+                            .disabled(store.database.classes.isEmpty)
+                        Button("반 JSON 가져오기") { importClassArchive() }
+                    } label: {
+                        Image(systemName: "square.and.arrow.up.on.square")
+                    }
+                    .help("반 파일 가져오기·내보내기")
                     Button { creating = true } label: { Image(systemName: "plus") }
                         .help("새 반 추가")
                 }
@@ -603,6 +611,37 @@ struct ClassesView: View {
         }
         selectedStudents.removeAll()
         self.deletionRequest = nil
+    }
+
+    private func exportClassArchive() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "notice-sender-classes.json"
+        panel.allowedContentTypes = [.json]
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try store.exportClassArchive(to: url)
+                store.banner = "반 \(store.database.classes.count)개와 연결 명단을 JSON으로 저장했습니다."
+            } catch {
+                store.banner = "반 파일 내보내기 실패: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func importClassArchive() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                let summary = try store.importClassArchive(from: url)
+                selectedID = selectedID.flatMap { id in store.database.classes.contains(where: { $0.id == id }) ? id : nil }
+                    ?? store.database.classes.first?.id
+                selectedStudents.removeAll()
+                store.banner = summary.message
+            } catch {
+                store.banner = "반 파일 가져오기 실패: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func availableStudents(for group: ClassGroup) -> [Student] {
@@ -862,6 +901,8 @@ struct LessonManagementView: View {
     @State private var isPreparingSend = false
     @State private var lessonDryRun = true
     @State private var lessonSelectionRevision = 0
+    @State private var showingMissingNicknameWarning = false
+    @State private var missingNicknameIssues: [DirectNoticeNicknameIssue] = []
 
     private var group: ClassGroup? { store.database.classes.first { $0.id == draft.classID } }
     private var preset: MessagePreset? { store.database.presets.first { $0.id == draft.presetID } }
@@ -953,7 +994,7 @@ struct LessonManagementView: View {
                     .disabled(kakao.isBusy || isPreparingSend)
                     .help("켜면 각 학생의 정확한 채팅방과 입력창만 확인하며 메시지·첨부파일은 전송하지 않습니다.")
                 Button {
-                    sendLessonNow()
+                    requestLessonSend()
                 } label: {
                     Label(
                         isPreparingSend ? "준비 중" : (lessonDryRun ? "공지 드라이런" : "공지 바로 발송"),
@@ -1047,6 +1088,12 @@ struct LessonManagementView: View {
         .onChange(of: group?.version) { oldVersion, newVersion in
             guard oldVersion != newVersion else { return }
             rebuildPerformanceRows()
+        }
+        .alert("공지 문구에 학생 호칭이 없습니다", isPresented: $showingMissingNicknameWarning) {
+            Button("돌아가서 직접 확인", role: .cancel) { }
+            Button("무시하고 직접 보내기", role: .destructive) { sendLessonNow() }
+        } message: {
+            Text("아래 학생은 자신의 호칭이 공지 문구에 포함되어 있지 않습니다. Google Sheet의 행과 문구가 맞는지 확인하세요.\n\n\(missingNicknameWarningText)")
         }
     }
 
@@ -1299,6 +1346,32 @@ struct LessonManagementView: View {
         }
     }
 
+    private func requestLessonSend() {
+        guard let preset else {
+            sendLessonNow()
+            return
+        }
+        missingNicknameIssues = DirectNoticeNicknameValidator.issuesIfWarningRequired(
+            isDryRun: lessonDryRun,
+            presetKind: preset.kind,
+            items: previewRows.map {
+                (studentID: $0.studentID, studentName: $0.studentName, nickname: $0.nickname, message: $0.message)
+            }
+        )
+        guard !missingNicknameIssues.isEmpty else {
+            sendLessonNow()
+            return
+        }
+        showingMissingNicknameWarning = true
+    }
+
+    private var missingNicknameWarningText: String {
+        missingNicknameIssues.map { issue in
+            let nickname = issue.nickname.isEmpty ? "호칭 비어 있음" : "호칭: \(issue.nickname)"
+            return "• \(issue.studentName) (\(nickname))"
+        }.joined(separator: "\n")
+    }
+
     private static let koreanDateFormatter: DateFormatter = {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "ko_KR"); formatter.dateFormat = "M월 d일"; return formatter
     }()
@@ -1464,6 +1537,8 @@ struct SendingView: View {
     @State private var commonClassID: UUID?
     @State private var commonMessages: [String] = [""]
     @State private var isScanningAttachments = false
+    @State private var showingMissingNicknameWarning = false
+    @State private var missingNicknameIssues: [DirectNoticeNicknameIssue] = []
 
     private var hasErrors: Bool { store.validationIssues.contains { $0.severity == .error } }
     var body: some View {
@@ -1569,7 +1644,7 @@ struct SendingView: View {
                     Text(kakao.statusText).foregroundStyle(.secondary)
                     Spacer()
                     if kakao.isBusy { Button("즉시 중지", role: .destructive) { kakao.stop() } }
-                    Button(dryRun ? "드라이런 시작" : "실제 발송 시작") { if dryRun { start(batch) } else { confirmRealSend = true } }
+                    Button(dryRun ? "드라이런 시작" : "실제 발송 시작") { if dryRun { start(batch) } else { requestRealSend(batch) } }
                         .buttonStyle(.borderedProminent).tint(dryRun ? .blue : .red).disabled(hasErrors || !reviewed || kakao.isBusy || batch.items.isEmpty)
                 }
             } else { ContentUnavailableView("반을 선택하고 Google Sheet의 오늘 수업값을 붙여넣으세요", systemImage: "doc.on.clipboard") }
@@ -1581,8 +1656,42 @@ struct SendingView: View {
             Button("취소", role: .cancel) { }
             Button("정확히 검토했으며 발송", role: .destructive) { if let batch = store.currentBatch { start(batch) } }
         } message: { Text("각 방 제목을 접근성 API로 재검증하지만 KakaoTalk UI 변경 시 즉시 중지될 수 있습니다.") }
+        .alert("공지 문구에 학생 호칭이 없습니다", isPresented: $showingMissingNicknameWarning) {
+            Button("돌아가서 직접 확인", role: .cancel) { }
+            Button("무시하고 직접 보내기", role: .destructive) {
+                if let batch = store.currentBatch { start(batch) }
+            }
+        } message: {
+            Text("아래 학생은 자신의 호칭이 공지 문구에 포함되어 있지 않습니다. Google Sheet의 행과 문구가 맞는지 확인하세요.\n\n\(missingNicknameWarningText)")
+        }
     }
     private func start(_ batch: SendBatch) { Task { await kakao.send(batch: batch, dryRun: dryRun, store: store) } }
+
+    private func requestRealSend(_ batch: SendBatch) {
+        guard let presetKind = store.database.presets.first(where: { $0.id == batch.metadata.presetID })?.kind else {
+            confirmRealSend = true
+            return
+        }
+        missingNicknameIssues = DirectNoticeNicknameValidator.issuesIfWarningRequired(
+            isDryRun: false,
+            presetKind: presetKind,
+            items: batch.items.map {
+                (studentID: $0.studentID, studentName: $0.studentName, nickname: $0.nickname, message: $0.message)
+            }
+        )
+        guard !missingNicknameIssues.isEmpty else {
+            confirmRealSend = true
+            return
+        }
+        showingMissingNicknameWarning = true
+    }
+
+    private var missingNicknameWarningText: String {
+        missingNicknameIssues.map { issue in
+            let nickname = issue.nickname.isEmpty ? "호칭 비어 있음" : "호칭: \(issue.nickname)"
+            return "• \(issue.studentName) (\(nickname))"
+        }.joined(separator: "\n")
+    }
 
     private var preparedInputGrid: some View {
         ScrollView([.horizontal, .vertical]) {

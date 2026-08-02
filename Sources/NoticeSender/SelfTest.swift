@@ -203,6 +203,62 @@ enum SelfTest {
             let namesByID = Dictionary(uniqueKeysWithValues: [studentC, studentA, studentB].map { ($0.id, $0.name) })
             return sorted.compactMap { namesByID[$0.studentID] } == ["김길동", "박하연", "이민준"]
         }
+        check("반 JSON 파일 다른 DB 왕복·학생 연결", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-class-archive-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let archiveURL = root.appendingPathComponent("classes.json")
+            let sourceStudentA = Student(name: "김길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "예전 길동방", chatID: "source-a")
+            let sourceStudentB = Student(name: "박하연", nickname: "하연이", school: "한성", admissionYear: 25, chatRoomName: "하연방", chatID: "source-b", isActive: false)
+            let sourceClass = ClassGroup(
+                name: "한성25",
+                school: "한성",
+                admissionYear: 25,
+                members: [
+                    ClassMember(studentID: sourceStudentB.id),
+                    ClassMember(studentID: sourceStudentA.id, nicknameOverride: "길동"),
+                ],
+                defaultPresetID: DefaultPresets.direct.id
+            )
+            let sourceStore = AppStore(databaseURL: root.appendingPathComponent("source.json"))
+            sourceStore.database = AppDatabase(students: [sourceStudentA, sourceStudentB], classes: [sourceClass], presets: DefaultPresets.all)
+            try sourceStore.exportClassArchive(to: archiveURL)
+
+            let existingStudent = Student(name: "김길동", nickname: "현재길동이", school: "한성", admissionYear: 25, chatRoomName: "최신 길동방", chatID: "target-a")
+            let targetStore = AppStore(databaseURL: root.appendingPathComponent("target.json"))
+            targetStore.database = AppDatabase(students: [existingStudent], presets: DefaultPresets.all)
+            let summary = try targetStore.importClassArchive(from: archiveURL)
+            guard let importedClass = targetStore.database.classes.first,
+                  let importedStudentB = targetStore.database.students.first(where: { $0.name == "박하연" }) else { return false }
+            return summary.addedStudents == 1
+                && summary.reusedStudents == 1
+                && summary.addedClasses == 1
+                && importedClass.members.map(\.studentID) == [existingStudent.id, importedStudentB.id]
+                && importedClass.members.first?.nicknameOverride == "길동"
+                && targetStore.student(id: existingStudent.id)?.chatRoomName == "최신 길동방"
+                && importedStudentB.isActive == false
+                && importedClass.defaultPresetID == DefaultPresets.direct.id
+        }
+        check("직접입력 실제 발송 호칭 누락만 deterministic 경고", failures: &failures) {
+            let includedID = UUID()
+            let missingID = UUID()
+            let items = [
+                (studentID: includedID, studentName: "김길동", nickname: "길동이", message: "길동이의 수업 공지입니다."),
+                (studentID: missingID, studentName: "박하연", nickname: "하연이", message: "민준이의 수업 공지입니다."),
+            ]
+            let actualDirect = DirectNoticeNicknameValidator.issuesIfWarningRequired(isDryRun: false, presetKind: .direct, items: items)
+            let dryRunDirect = DirectNoticeNicknameValidator.issuesIfWarningRequired(isDryRun: true, presetKind: .direct, items: items)
+            let actualRegular = DirectNoticeNicknameValidator.issuesIfWarningRequired(isDryRun: false, presetKind: .regular, items: items)
+            let allValid = DirectNoticeNicknameValidator.issuesIfWarningRequired(
+                isDryRun: false,
+                presetKind: .direct,
+                items: [(studentID: includedID, studentName: "김길동", nickname: "길동이", message: "길동이의 수업 공지입니다.")]
+            )
+            return actualDirect.map(\.studentID) == [missingID]
+                && dryRunDirect.isEmpty
+                && actualRegular.isEmpty
+                && allValid.isEmpty
+        }
         check("스프레드시트 드래그 범위 삭제", failures: &failures) {
             let first = PreparedNoticeRow(id: UUID(), number: 1, name: "김길동", nickname: "길동이", homework: "8", test: "9")
             let second = PreparedNoticeRow(id: UUID(), number: 2, name: "박하연", nickname: "하연이", homework: "7", test: "6")

@@ -179,6 +179,98 @@ final class AppStore: ObservableObject {
         save()
     }
 
+    func exportClassArchive(to url: URL) throws {
+        let archive = try ClassArchiveBuilder.make(database: database)
+        try encoder.encode(archive).write(to: url, options: .atomic)
+    }
+
+    @discardableResult
+    func importClassArchive(from url: URL) throws -> ClassArchiveImportSummary {
+        let archive = try decoder.decode(ClassArchive.self, from: Data(contentsOf: url))
+        guard archive.schemaVersion == ClassArchive.currentSchemaVersion else {
+            throw ClassArchiveError.unsupportedSchema(archive.schemaVersion)
+        }
+        guard !archive.classes.isEmpty else { throw ClassArchiveError.noClasses }
+
+        var addedStudents = 0
+        var reusedStudents = 0
+        var addedClasses = 0
+        var updatedClasses = 0
+        var skippedMembers = 0
+        var localStudentIDByArchivedID: [UUID: UUID] = [:]
+
+        for archivedStudent in archive.students {
+            if let existing = database.students.first(where: { $0.id == archivedStudent.id }) {
+                localStudentIDByArchivedID[archivedStudent.id] = existing.id
+                reusedStudents += 1
+                continue
+            }
+            let identityMatches = database.students.filter { $0.duplicateKey == archivedStudent.duplicateKey }
+            if identityMatches.count == 1, let existing = identityMatches.first {
+                localStudentIDByArchivedID[archivedStudent.id] = existing.id
+                reusedStudents += 1
+            } else if identityMatches.isEmpty {
+                database.students.append(archivedStudent)
+                localStudentIDByArchivedID[archivedStudent.id] = archivedStudent.id
+                addedStudents += 1
+            }
+        }
+
+        var localPresetIDByArchivedID: [UUID: UUID] = [:]
+        for archivedPreset in archive.presets {
+            if let existing = database.presets.first(where: { $0.id == archivedPreset.id })
+                ?? database.presets.first(where: { $0.kind == archivedPreset.kind && $0.name == archivedPreset.name }) {
+                localPresetIDByArchivedID[archivedPreset.id] = existing.id
+            } else {
+                database.presets.append(archivedPreset)
+                localPresetIDByArchivedID[archivedPreset.id] = archivedPreset.id
+            }
+        }
+        let directPresetID = database.presets.first(where: { $0.kind == .direct })?.id
+
+        for archivedClass in archive.classes {
+            var mapped = archivedClass
+            mapped.members = archivedClass.members.compactMap { member in
+                guard let localStudentID = localStudentIDByArchivedID[member.studentID] else {
+                    skippedMembers += 1
+                    return nil
+                }
+                return ClassMember(studentID: localStudentID, nicknameOverride: member.nicknameOverride)
+            }
+            mapped.members = ClassMemberSorter.sorted(mapped.members, students: database.students)
+            mapped.defaultPresetID = archivedClass.defaultPresetID.flatMap { localPresetIDByArchivedID[$0] } ?? directPresetID
+
+            let identityMatches = database.classes.indices.filter {
+                database.classes[$0].name == archivedClass.name
+                    && database.classes[$0].school == archivedClass.school
+                    && database.classes[$0].admissionYear == archivedClass.admissionYear
+            }
+            let targetIndex = database.classes.firstIndex(where: { $0.id == archivedClass.id })
+                ?? (identityMatches.count == 1 ? identityMatches.first : nil)
+            if let targetIndex {
+                mapped.id = database.classes[targetIndex].id
+                mapped.version = max(database.classes[targetIndex].version, archivedClass.version) + 1
+                database.classes[targetIndex] = mapped
+                updatedClasses += 1
+            } else {
+                mapped.version = max(1, archivedClass.version)
+                database.classes.append(mapped)
+                addedClasses += 1
+            }
+        }
+
+        currentBatch = nil
+        validationIssues = []
+        save()
+        return ClassArchiveImportSummary(
+            addedStudents: addedStudents,
+            reusedStudents: reusedStudents,
+            addedClasses: addedClasses,
+            updatedClasses: updatedClasses,
+            skippedMembers: skippedMembers
+        )
+    }
+
     func addPresetVersion(from preset: MessagePreset) {
         var next = preset
         next.id = UUID()
