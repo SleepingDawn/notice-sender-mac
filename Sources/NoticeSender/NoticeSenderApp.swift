@@ -7,8 +7,21 @@ struct NoticeSenderApp: App {
     @StateObject private var kakao: KakaoAutomationService
 
     init() {
-        if CommandLine.arguments.contains("--self-test") {
+        let arguments = CommandLine.arguments
+        if arguments.contains("--self-test") {
             Darwin.exit(SelfTest.run())
+        }
+        if let optionIndex = arguments.firstIndex(of: "--export-student-csv"), arguments.indices.contains(optionIndex + 1) {
+            let destination = URL(fileURLWithPath: arguments[optionIndex + 1])
+            let exportStore = AppStore()
+            do {
+                try exportStore.exportStudentCSV(to: destination)
+                print("학생 DB \(exportStore.database.students.count)명을 \(destination.path)에 저장했습니다.")
+                Darwin.exit(EXIT_SUCCESS)
+            } catch {
+                fputs("학생 DB CSV 내보내기 실패: \(error.localizedDescription)\n", stderr)
+                Darwin.exit(EXIT_FAILURE)
+            }
         }
         _store = StateObject(wrappedValue: AppStore())
         _kakao = StateObject(wrappedValue: KakaoAutomationService())

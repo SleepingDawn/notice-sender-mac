@@ -278,30 +278,50 @@ final class AppStore: ObservableObject {
 
     func importStudentFile(url: URL) async {
         do {
-            let imported = try StudentFileImporter.importStudents(at: url)
+            let imported = try StudentFileImporter.importRecords(at: url)
             func studentIdentity(_ student: Student) -> String { "\(student.name)|\(student.school)|\(student.admissionYear)" }
             var additions = 0
             var updates = 0
             var skipped = 0
-            for student in imported {
-                let matches = database.students.indices.filter { studentIdentity(database.students[$0]) == studentIdentity(student) }
-                if matches.isEmpty {
+            for record in imported {
+                let student = record.student
+                let idMatch = record.sourceID.flatMap { sourceID in
+                    database.students.firstIndex(where: { $0.id == sourceID })
+                }
+                let identityMatches = database.students.indices.filter { studentIdentity(database.students[$0]) == studentIdentity(student) }
+                let targetIndex = idMatch ?? (identityMatches.count == 1 ? identityMatches.first : nil)
+                let sourceIDIsAvailable = record.sourceID.map { sourceID in
+                    !database.students.contains(where: { $0.id == sourceID })
+                } ?? true
+                if let index = targetIndex {
+                    var merged = student
+                    merged.id = database.students[index].id
+                    if !record.nicknameProvided { merged.nickname = database.students[index].nickname }
+                    if !record.chatIDProvided { merged.chatID = database.students[index].chatID }
+                    if !record.statusProvided { merged.isActive = database.students[index].isActive }
+                    database.students[index] = merged
+                    updates += 1
+                } else if identityMatches.isEmpty, sourceIDIsAvailable {
                     database.students.append(student)
                     additions += 1
-                } else if matches.count == 1, let index = matches.first,
-                          let importedChatID = student.chatID?.nilIfEmpty {
-                    database.students[index].chatRoomName = student.chatRoomName
-                    database.students[index].chatID = importedChatID
-                    updates += 1
                 } else {
                     skipped += 1
                 }
             }
+            for classIndex in database.classes.indices {
+                database.classes[classIndex].members = ClassMemberSorter.sorted(database.classes[classIndex].members, students: database.students)
+            }
+            currentBatch = nil
+            validationIssues = []
             save()
-            banner = "학생 \(additions)명을 등록하고, 고유하게 일치한 기존 학생 \(updates)명의 최신 톡방·chat_id를 갱신했습니다. 중복 후보 \(skipped)건은 건너뛰었습니다."
+            banner = "학생 \(additions)명을 등록하고 기존 학생 \(updates)명을 갱신했습니다. 중복·충돌 후보 \(skipped)건은 건너뛰었습니다."
         } catch {
             banner = "학생 DB 가져오기 실패: \(error.localizedDescription)"
         }
+    }
+
+    func exportStudentCSV(to url: URL) throws {
+        try StudentDatabaseCSV.write(students: database.students, to: url)
     }
 
     func syncStudentsFromKakaoChats() async {

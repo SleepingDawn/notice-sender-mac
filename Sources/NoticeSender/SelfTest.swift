@@ -130,6 +130,28 @@ enum SelfTest {
                 && students.first(where: { $0.name == "홍길동" })?.chatID == "chat-recent-1"
                 && students.first(where: { $0.name == "김학생" })?.admissionYear == 26
         }
+        check("학생 DB CSV 전체 필드 왕복", failures: &failures) {
+            let original = Student(
+                id: UUID(uuidString: "6A28B859-1E25-4C14-8F15-A9F0D91DE671")!,
+                name: "김\"학생",
+                nickname: "별칭,학생이",
+                school: "한성",
+                admissionYear: 7,
+                chatRoomName: "07. 한성 김학생\n화학방",
+                chatID: "chat-id-1",
+                isActive: false
+            )
+            guard var text = String(data: StudentDatabaseCSV.data(students: [original]), encoding: .utf8) else { return false }
+            if text.first == "\u{feff}" { text.removeFirst() }
+            let rows = StudentFileImporter.parseDelimited(text, delimiter: ",")
+            let records = try StudentFileImporter.records(from: rows)
+            guard let record = records.first else { return false }
+            return record.student == original
+                && record.sourceID == original.id
+                && record.nicknameProvided
+                && record.chatIDProvided
+                && record.statusProvided
+        }
         check("학교별 Academy 양식 적용", failures: &failures) {
             let student = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "테스트방")
             let group = ClassGroup(name: "한성25", school: "한성", admissionYear: 25, members: [ClassMember(studentID: student.id)])

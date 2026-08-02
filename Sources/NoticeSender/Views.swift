@@ -318,6 +318,7 @@ struct StudentsView: View {
                 .disabled(store.isSyncingStudentsFromKakao)
                 Button("학생 추가") { adding = true }.buttonStyle(.borderedProminent)
                 Button("XLSX/CSV 가져오기") { importStudentFile() }
+                Button("CSV 내보내기") { exportStudentCSV() }
                 Button("선택 학생 \(selectedStudentIDs.count)명 삭제", role: .destructive) {
                     showingDeleteConfirmation = true
                 }
@@ -370,6 +371,19 @@ struct StudentsView: View {
         panel.allowedContentTypes = [.spreadsheet, .commaSeparatedText, .tabSeparatedText]
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url { Task { await store.importStudentFile(url: url) } }
+    }
+    private func exportStudentCSV() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "notice-sender-students.csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try store.exportStudentCSV(to: url)
+                store.banner = "학생 DB \(store.database.students.count)명을 CSV로 저장했습니다."
+            } catch {
+                store.banner = "학생 DB CSV 내보내기 실패: \(error.localizedDescription)"
+            }
+        }
     }
 }
 
