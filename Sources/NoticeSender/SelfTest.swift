@@ -65,6 +65,21 @@ enum SelfTest {
             let item = BatchItem(studentID: student.id, studentName: student.name, nickname: student.nickname, chatRoomName: student.chatRoomName, message: DirectNoticeMessage.normalized(entered), preserveMessageWhitespace: true)
             return item.allMessages == ["  첫 줄\n둘째 줄  "]
         }
+        check("빈 직접입력 문구는 드라이런만 허용", failures: &failures) {
+            let student = Student(name: "테스트학생", nickname: "학생이", school: "테스트", admissionYear: 26, chatRoomName: "테스트방")
+            let group = ClassGroup(name: "테스트", school: "테스트", admissionYear: 26, members: [ClassMember(studentID: student.id)], defaultPresetID: DefaultPresets.direct.id)
+            let metadata = BatchMetadata(schemaVersion: 1, classID: group.id, sessionID: UUID(), date: "8월 2일", presetID: DefaultPresets.direct.id, presetVersion: DefaultPresets.direct.version)
+            let item = BatchItem(studentID: student.id, studentName: student.name, nickname: student.nickname, chatRoomName: student.chatRoomName, message: "", chatID: student.chatID, preserveMessageWhitespace: true)
+            let batch = SendBatch(metadata: metadata, items: [item])
+            let database = AppDatabase(students: [student], classes: [group], presets: DefaultPresets.all)
+            let row = PreparedNoticeRow(id: student.id, number: 1, name: student.name, nickname: student.nickname)
+            let dryRunIssues = BatchParser.validate(batch: batch, database: database, allowEmptyMessages: true)
+            let actualIssues = BatchParser.validate(batch: batch, database: database)
+            return PreparedNoticeSelection.directMessagesAreReady(in: [row], allowEmptyMessages: true)
+                && !PreparedNoticeSelection.directMessagesAreReady(in: [row])
+                && !dryRunIssues.contains { $0.message.contains("메시지가 비어") }
+                && actualIssues.contains { $0.severity == .error && $0.message.contains("메시지가 비어") }
+        }
         check("드라이런·실제 발송 재확인 상태 규칙", failures: &failures) {
             BatchRunPolicy.shouldProcess(status: .sent, dryRun: true)
                 && !BatchRunPolicy.shouldProcess(status: .sent, dryRun: false)

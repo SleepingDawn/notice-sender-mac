@@ -932,7 +932,7 @@ struct LessonManagementView: View {
         let includedRows = PreparedNoticeSelection.includedRows(performanceRows)
         guard !includedRows.isEmpty else { return false }
         if preset.kind == .direct {
-            return PreparedNoticeSelection.directMessagesAreReady(in: performanceRows)
+            return PreparedNoticeSelection.directMessagesAreReady(in: performanceRows, allowEmptyMessages: lessonDryRun)
         }
         guard !draft.progress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         switch preset.kind {
@@ -950,7 +950,9 @@ struct LessonManagementView: View {
             return PreparedNoticeSelection.includedRows(performanceRows).compactMap { performance in
                 guard let student = store.student(id: performance.id) else { return nil }
                 let message = DirectNoticeMessage.normalized(performance.noticeMessage)
-                let error = message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "공지 멘트가 비어 있습니다." : nil
+                let error = message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !lessonDryRun
+                    ? "공지 멘트가 비어 있습니다."
+                    : nil
                 return LessonPreviewRow(
                     studentID: student.id,
                     studentName: student.name,
@@ -1270,7 +1272,7 @@ struct LessonManagementView: View {
         }
     }
 
-    private func makeLessonBatch() -> (SendBatch, [ValidationIssue])? {
+    private func makeLessonBatch(allowEmptyMessages: Bool) -> (SendBatch, [ValidationIssue])? {
         guard let group, let preset else { return nil }
         var issues: [ValidationIssue] = []
         if performanceRows.count != group.members.count {
@@ -1307,7 +1309,7 @@ struct LessonManagementView: View {
             presetVersion: preset.version
         )
         let batch = SendBatch(metadata: metadata, items: items)
-        issues.append(contentsOf: BatchParser.validate(batch: batch, database: store.database))
+        issues.append(contentsOf: BatchParser.validate(batch: batch, database: store.database, allowEmptyMessages: allowEmptyMessages))
         return (batch, issues)
     }
 
@@ -1318,7 +1320,7 @@ struct LessonManagementView: View {
             store.banner = "시스템 설정에서 공지발송 스위치를 켠 뒤 다시 시도해주세요."
             return
         }
-        guard let (initialBatch, initialIssues) = makeLessonBatch() else {
+        guard let (initialBatch, initialIssues) = makeLessonBatch(allowEmptyMessages: operationDryRun) else {
             store.banner = "반과 Preset을 선택하고 수업 내용을 입력하세요."
             return
         }
@@ -1350,7 +1352,7 @@ struct LessonManagementView: View {
                     isPreparingSend = false
                     return
                 }
-                let issues = BatchParser.validate(batch: batch, database: store.database)
+                let issues = BatchParser.validate(batch: batch, database: store.database, allowEmptyMessages: operationDryRun)
                 store.currentBatch = batch
                 store.validationIssues = issues
                 guard !issues.contains(where: { $0.severity == .error }) else {
@@ -1534,13 +1536,13 @@ enum PreparedNoticeSelection {
         rows.filter(\.isIncluded)
     }
 
-    static func directMessagesAreReady(in rows: [PreparedNoticeRow]) -> Bool {
+    static func directMessagesAreReady(in rows: [PreparedNoticeRow], allowEmptyMessages: Bool = false) -> Bool {
         let included = includedRows(rows)
-        return !included.isEmpty && included.allSatisfy {
+        return !included.isEmpty && (allowEmptyMessages || included.allSatisfy {
             !DirectNoticeMessage.normalized($0.noticeMessage)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty
-        }
+        })
     }
 }
 

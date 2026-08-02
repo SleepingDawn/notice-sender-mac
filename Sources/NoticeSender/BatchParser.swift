@@ -17,7 +17,7 @@ enum BatchParser {
         return parseLegacy(rows: rows, database: database, selectedClassID: selectedClassID)
     }
 
-    static func validate(batch: SendBatch, database: AppDatabase) -> [ValidationIssue] {
+    static func validate(batch: SendBatch, database: AppDatabase, allowEmptyMessages: Bool = false) -> [ValidationIssue] {
         var issues: [ValidationIssue] = []
         if batch.metadata.date.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || batch.metadata.date == "날짜 입력" {
             issues.append(ValidationIssue(severity: .error, message: "수업 날짜를 입력해야 합니다."))
@@ -42,7 +42,7 @@ enum BatchParser {
             if item.chatRoomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 issues.append(ValidationIssue(severity: .error, row: index + 1, message: "톡방 이름이 비어 있습니다."))
             }
-            if item.allMessages.isEmpty {
+            if item.allMessages.isEmpty && !allowEmptyMessages {
                 issues.append(ValidationIssue(severity: .error, row: index + 1, message: "발송할 메시지가 비어 있습니다."))
             }
             if item.allMessages.count > 5 {
