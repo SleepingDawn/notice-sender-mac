@@ -18,7 +18,7 @@ enum StudentDatabaseCSV {
                 student.name,
                 student.nickname,
                 student.school,
-                String(format: "%02d", student.admissionYear),
+                AdmissionYearPolicy.formatted(student.admissionYear),
                 student.chatRoomName,
                 student.chatID ?? "",
                 student.isActive ? "활성" : "비활성",

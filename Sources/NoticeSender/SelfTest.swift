@@ -28,18 +28,34 @@ enum SelfTest {
             try encoder.encode(oldDatabase).write(to: file)
             let migrated = AppStore(databaseURL: file).database
             guard let direct = migrated.presets.first(where: { $0.kind == .direct }), let testClass = migrated.classes.first(where: { $0.name == "테스트" }) else { return false }
-            return migrated.schemaVersion == 6
+            return migrated.schemaVersion == 7
                 && testClass.defaultPresetID == direct.id
-                && migrated.operatingAdmissionYears == OperatingAdmissionYearPolicy.defaultYears()
+                && migrated.operatingAdmissionYears == AdmissionYearPolicy.allYears
         }
-        check("운영 학번 2자리 기본값·자유 설정", failures: &failures) {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-            let january = calendar.date(from: DateComponents(year: 2027, month: 1, day: 10))!
-            let march = calendar.date(from: DateComponents(year: 2027, month: 3, day: 10))!
-            return OperatingAdmissionYearPolicy.defaultYears(for: january, calendar: calendar) == [24, 25, 26]
-                && OperatingAdmissionYearPolicy.defaultYears(for: march, calendar: calendar) == [25, 26, 27]
-                && OperatingAdmissionYearPolicy.normalized([27, 25, 27, -1, 100]) == [25, 27]
+        check("학번 00~99 전체 범위·두 자리 표기", failures: &failures) {
+            AdmissionYearPolicy.allYears == Array(0...99)
+                && AdmissionYearPolicy.normalized([99, 0, 99, -1, 100]) == [0, 99]
+                && AdmissionYearPolicy.formatted(0) == "00"
+                && AdmissionYearPolicy.formatted(7) == "07"
+                && AdmissionYearPolicy.formatted(99) == "99"
+                && AdmissionYearPolicy.parseTwoDigit("00") == 0
+                && AdmissionYearPolicy.parseTwoDigit("99") == 99
+                && AdmissionYearPolicy.parseTwoDigit("0") == nil
+                && AdmissionYearPolicy.parseTwoDigit("100") == nil
+                && AdmissionYearPolicy.parseImported("2000") == 0
+                && AdmissionYearPolicy.parseImported("2099") == 99
+        }
+        check("기존 24~26 운영 학번 제한 자동 제거", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-year-migration-\(UUID().uuidString)", isDirectory: true)
+            let file = root.appendingPathComponent("database.json")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let oldDatabase = AppDatabase(schemaVersion: 6, operatingAdmissionYears: [24, 25, 26])
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(oldDatabase).write(to: file)
+            let migrated = AppStore(databaseURL: file).database
+            return migrated.schemaVersion == 7
+                && migrated.operatingAdmissionYears == AdmissionYearPolicy.allYears
         }
         check("테스트 반 학생별 직접 문구 발송 목록", failures: &failures) {
             let students = (1...5).map { index in
@@ -137,13 +153,14 @@ enum SelfTest {
             return rows.count == 2 && rows[1].count == 2 && rows[1][1] == "첫 줄\n둘째 \"인용\" 줄"
         }
         check("일반 CSV 학생 헤더 가져오기", failures: &failures) {
-            let csv = "이름,학교,학번,톡방 이름,chat_id,호칭\n홍길동,한성,25,\"25. 한성 홍길동 화학방\",chat-recent-1,길동이\n김학생,세종,2026,세종26 김학생 방,,학생이"
+            let csv = "이름,학교,학번,톡방 이름,chat_id,호칭\n홍길동,한성,00,\"00. 한성 홍길동 화학방\",chat-recent-1,길동이\n김학생,세종,2099,세종99 김학생 방,,학생이"
             let rows = StudentFileImporter.parseDelimited(csv, delimiter: ",")
             let students = try StudentFileImporter.students(from: rows)
             return students.count == 2
                 && students.first(where: { $0.name == "홍길동" })?.nickname == "길동이"
                 && students.first(where: { $0.name == "홍길동" })?.chatID == "chat-recent-1"
-                && students.first(where: { $0.name == "김학생" })?.admissionYear == 26
+                && students.first(where: { $0.name == "홍길동" })?.admissionYear == 0
+                && students.first(where: { $0.name == "김학생" })?.admissionYear == 99
         }
         check("학생 DB CSV 전체 필드 왕복", failures: &failures) {
             let original = Student(
@@ -156,7 +173,7 @@ enum SelfTest {
                 chatID: "chat-id-1",
                 isActive: false
             )
-            guard var text = String(data: StudentDatabaseCSV.data(students: [original]), encoding: .utf8) else { return false }
+            guard var text = String(data: StudentDatabaseCSV.data(students: [original]), encoding: .utf8), text.contains("\"07\"") else { return false }
             if text.first == "\u{feff}" { text.removeFirst() }
             let rows = StudentFileImporter.parseDelimited(text, delimiter: ",")
             let records = try StudentFileImporter.records(from: rows)
@@ -198,15 +215,15 @@ enum SelfTest {
             return rows[header + 2][1] == "김길동" && rows[header + 3][1] == "박하연"
         }
         check("새 반 학교·학번 학생 필터", failures: &failures) {
-            let targetB = Student(name: "박하연", nickname: "하연이", school: "한성", admissionYear: 25, chatRoomName: "B방")
-            let targetA = Student(name: "김길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "A방")
-            let wrongSchool = Student(name: "김세종", nickname: "세종이", school: "세종", admissionYear: 25, chatRoomName: "C방")
-            let wrongYear = Student(name: "김후배", nickname: "후배", school: "한성", admissionYear: 26, chatRoomName: "D방")
-            let inactive = Student(name: "김비활성", nickname: "비활성이", school: "한성", admissionYear: 25, chatRoomName: "E방", isActive: false)
+            let targetB = Student(name: "박하연", nickname: "하연이", school: "한성", admissionYear: 0, chatRoomName: "B방")
+            let targetA = Student(name: "김길동", nickname: "길동이", school: "한성", admissionYear: 0, chatRoomName: "A방")
+            let wrongSchool = Student(name: "김세종", nickname: "세종이", school: "세종", admissionYear: 0, chatRoomName: "C방")
+            let wrongYear = Student(name: "김후배", nickname: "후배", school: "한성", admissionYear: 99, chatRoomName: "D방")
+            let inactive = Student(name: "김비활성", nickname: "비활성이", school: "한성", admissionYear: 0, chatRoomName: "E방", isActive: false)
             let students = [targetB, wrongSchool, inactive, wrongYear, targetA]
-            let filtered = ClassStudentFilter.students(in: students, school: " 한성 ", admissionYear: 25)
+            let filtered = ClassStudentFilter.students(in: students, school: " 한성 ", admissionYear: 0)
             return filtered.map(\.name) == ["김길동", "박하연"]
-                && ClassStudentFilter.students(in: students, school: "", admissionYear: 25).isEmpty
+                && ClassStudentFilter.students(in: students, school: "", admissionYear: 0).isEmpty
                 && ClassStudentFilter.students(in: students, school: "한성", admissionYear: nil).isEmpty
         }
         check("반 명단 성명순 정렬", failures: &failures) {
@@ -496,6 +513,17 @@ enum SelfTest {
                 && parsed.chatID == "chat-parser"
                 && parsed.hasStandardSuffix
         }
+        check("카카오톡 학생방 00·99 학번 파싱", failures: &failures) {
+            let zero = KakaoStudentRoomParser.parse(
+                KmsgEmbeddedChat(title: "00 한성 김영희 화학 단톡방", chatID: "chat-00", lastMessage: "최근", listIndex: 0),
+                knownSchools: []
+            )
+            let ninetyNine = KakaoStudentRoomParser.parse(
+                KmsgEmbeddedChat(title: "한성99 박철수 화학 단톡방", chatID: "chat-99", lastMessage: "최근", listIndex: 1),
+                knownSchools: []
+            )
+            return zero?.admissionYear == 0 && ninetyNine?.admissionYear == 99
+        }
         check("카카오톡 최신 방 학생 DB 자동 갱신", failures: &failures) {
             let existing = Student(name: "김민준", nickname: "민준이", school: "인천", admissionYear: 26, chatRoomName: "이전 방", chatID: "chat-old-db")
             let chats = [
@@ -506,7 +534,7 @@ enum SelfTest {
                 KmsgEmbeddedChat(title: "세종26 이학생 화학 단톡방", chatID: "chat-ambiguous-1", lastMessage: nil, listIndex: 8),
                 KmsgEmbeddedChat(title: "26 세종 이학생 화학 단톡방", chatID: "chat-ambiguous-2", lastMessage: nil, listIndex: 9),
             ]
-            let output = KakaoStudentDBSynchronizer.synchronize(chats: chats, currentStudents: [existing], currentYear: 26)
+            let output = KakaoStudentDBSynchronizer.synchronize(chats: chats, currentStudents: [existing])
             let updated = output.students.first { $0.name == "김민준" }
             let added = output.students.first { $0.name == "박하연" }
             return updated?.chatID == "chat-new"
@@ -518,20 +546,15 @@ enum SelfTest {
                 && output.report.skippedIdentities == 1
                 && output.report.multipleRoomSelections == 1
         }
-        check("카카오톡 DB 운영 학번 제한", failures: &failures) {
+        check("카카오톡 DB 00~99 전체 학번 반영", failures: &failures) {
             let chats = [
-                KmsgEmbeddedChat(title: "21 한성 김길동 화학 단톡방", chatID: "chat-21", lastMessage: "최신", listIndex: 0),
+                KmsgEmbeddedChat(title: "00 한성 김길동 화학 단톡방", chatID: "chat-00", lastMessage: "최신", listIndex: 0),
                 KmsgEmbeddedChat(title: "26 한성 박하연 화학 단톡방", chatID: "chat-26", lastMessage: "최신", listIndex: 1),
-                KmsgEmbeddedChat(title: "31 한성 이민준 화학 단톡방", chatID: "chat-31", lastMessage: "최신", listIndex: 2),
+                KmsgEmbeddedChat(title: "99 한성 이민준 화학 단톡방", chatID: "chat-99", lastMessage: "최신", listIndex: 2),
             ]
-            let output = KakaoStudentDBSynchronizer.synchronize(
-                chats: chats,
-                currentStudents: [],
-                allowedAdmissionYears: Set([21, 31]),
-                currentYear: 26
-            )
-            return Set(output.students.map(\.admissionYear)) == Set([21, 31])
-                && output.students.allSatisfy { $0.admissionYear != 26 }
+            let output = KakaoStudentDBSynchronizer.synchronize(chats: chats, currentStudents: [])
+            return Set(output.students.map(\.admissionYear)) == Set([0, 26, 99])
+                && output.report.addedStudents == 3
         }
         check("실제 추출 채팅 최대 1000개 학생방 인식", failures: &failures) {
             struct ChatRow: Decodable {

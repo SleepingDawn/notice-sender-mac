@@ -25,17 +25,44 @@ struct Student: Codable, Identifiable, Hashable, Sendable {
     var duplicateKey: String { "\(school)|\(admissionYear)|\(name)" }
 }
 
-enum OperatingAdmissionYearPolicy {
-    static func normalized(_ years: [Int]) -> [Int] {
-        Array(Set(years.filter { (0...99).contains($0) })).sorted()
+enum AdmissionYearPolicy {
+    static let validRange = 0...99
+    static let allYears = Array(validRange)
+
+    static func isValid(_ year: Int) -> Bool {
+        validRange.contains(year)
     }
 
-    static func defaultYears(for date: Date = .now, calendar: Calendar = .current) -> [Int] {
-        let components = calendar.dateComponents([.year, .month], from: date)
-        let calendarYear = components.year ?? 2000
-        let academicYear = (components.month ?? 1) < 3 ? calendarYear - 1 : calendarYear
-        let newest = (academicYear % 100 + 100) % 100
-        return normalized([(newest - 2 + 100) % 100, (newest - 1 + 100) % 100, newest])
+    static func formatted(_ year: Int) -> String {
+        isValid(year) ? String(format: "%02d", year) : String(year)
+    }
+
+    static func parseTwoDigit(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count == 2,
+              trimmed.unicodeScalars.allSatisfy({ (48...57).contains(Int($0.value)) }),
+              let year = Int(trimmed),
+              isValid(year)
+        else { return nil }
+        return year
+    }
+
+    static func parseImported(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "")
+        var year: Int
+        if let numeric = Double(trimmed), numeric.rounded() == numeric {
+            year = Int(numeric)
+        } else {
+            let digits = trimmed.filter(\.isNumber)
+            guard let parsed = Int(digits) else { return nil }
+            year = parsed
+        }
+        if (1_000...9_999).contains(year) { year %= 100 }
+        return isValid(year) ? year : nil
+    }
+
+    static func normalized(_ years: [Int]) -> [Int] {
+        Array(Set(years.filter(isValid))).sorted()
     }
 }
 
@@ -223,7 +250,7 @@ struct LessonPlan: Codable, Identifiable, Hashable, Sendable {
 }
 
 struct AppDatabase: Codable, Sendable {
-    var schemaVersion: Int = 6
+    var schemaVersion: Int = 7
     var students: [Student] = []
     var classes: [ClassGroup] = []
     var presets: [MessagePreset] = DefaultPresets.all
@@ -233,7 +260,7 @@ struct AppDatabase: Codable, Sendable {
     /// Optional to preserve compatibility with databases created before lesson management.
     var lessonPlans: [LessonPlan]? = nil
     var attachmentRootPath: String? = nil
-    /// Two-digit cohorts currently eligible for Kakao DB sync and new class creation.
+    /// Legacy compatibility field. Schema 7 always stores every two-digit cohort (00...99).
     var operatingAdmissionYears: [Int]? = nil
 }
 

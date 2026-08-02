@@ -57,9 +57,9 @@ enum XLSXMigrationImporter {
         for row in 5...max(5, grid.maxRow) {
             let name = grid.value(row: row, column: 2).trimmed
             let school = grid.value(row: row, column: 3).trimmed
-            let year = Int(Double(grid.value(row: row, column: 4)) ?? -1)
+            let year = AdmissionYearPolicy.parseImported(grid.value(row: row, column: 4))
             let room = grid.value(row: row, column: 5).trimmed
-            guard !name.isEmpty, !school.isEmpty, year > 0, !room.isEmpty else { continue }
+            guard !name.isEmpty, !school.isEmpty, let year, !room.isEmpty else { continue }
             students.append(Student(name: name, nickname: NicknameGenerator.generate(from: name), school: school, admissionYear: year, chatRoomName: room))
         }
 

@@ -74,6 +74,7 @@ enum KakaoStudentRoomParser {
                   let schoolToken = capture("school", match: match, in: title),
                   let yearText = capture("year", match: match, in: title),
                   let year = Int(yearText),
+                  AdmissionYearPolicy.isValid(year),
                   let name = capture("name", match: match, in: title)
             else { continue }
 
@@ -116,14 +117,11 @@ enum KakaoStudentRoomParser {
 enum KakaoStudentDBSynchronizer {
     static func synchronize(
         chats: [KmsgEmbeddedChat],
-        currentStudents: [Student],
-        allowedAdmissionYears: Set<Int>? = nil,
-        currentYear: Int = Calendar.current.component(.year, from: .now) % 100
+        currentStudents: [Student]
     ) -> KakaoStudentDBSyncOutput {
         var students = currentStudents
         let knownSchools = Set(currentStudents.map(\.school))
         let parsed = chats.compactMap { KakaoStudentRoomParser.parse($0, knownSchools: knownSchools) }
-        let allowedYears = allowedAdmissionYears ?? Set((0...2).map { (currentYear - $0 + 100) % 100 })
         let groups = Dictionary(grouping: parsed, by: \.identityKey)
         var added = 0
         var updated = 0
@@ -133,7 +131,7 @@ enum KakaoStudentDBSynchronizer {
 
         for key in groups.keys.sorted() {
             guard let allRows = groups[key] else { continue }
-            let rows = allRows.filter { $0.hasStandardSuffix && allowedYears.contains($0.admissionYear) }
+            let rows = allRows.filter { $0.hasStandardSuffix && AdmissionYearPolicy.isValid($0.admissionYear) }
             guard !rows.isEmpty else {
                 skipped += 1
                 continue

@@ -239,7 +239,7 @@ private struct DuplicateReviewSheet: View {
                     TableColumn("중복 기준", value: \.reason).width(min: 190)
                     TableColumn("이름") { Text($0.student.name) }.width(90)
                     TableColumn("학교") { Text($0.student.school) }.width(70)
-                    TableColumn("학번") { Text(String($0.student.admissionYear)) }.width(55)
+                    TableColumn("학번") { Text(AdmissionYearPolicy.formatted($0.student.admissionYear)) }.width(55)
                     TableColumn("상태") { Text($0.student.isActive ? "활성" : "비활성") }.width(65)
                     TableColumn("톡방 이름") { Text($0.student.chatRoomName) }.width(min: 260)
                     TableColumn("chat_id") { Text($0.student.chatID ?? "—") }.width(min: 150)
@@ -275,7 +275,6 @@ struct StudentsView: View {
     @State private var editing: Student?
     @State private var adding = false
     @State private var selectedStudentIDs = Set<UUID>()
-    @State private var showingOperatingYears = false
     @State private var showingDeleteConfirmation = false
 
     private var schools: [String] { ["전체"] + Set(store.database.students.map(\.school)).sorted() }
@@ -290,16 +289,11 @@ struct StudentsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("학생 DB").font(.largeTitle.bold())
-                Text("운영 학번: \(store.operatingAdmissionYears.map { String(format: "%02d", $0) }.joined(separator: ", "))")
+                Text("학번 범위: 00~99")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("운영 학번 설정") { showingOperatingYears = true }
                 Button {
-                    guard !store.operatingAdmissionYears.isEmpty else {
-                        store.banner = "카카오톡 DB 업데이트 전에 운영 학번을 설정해주세요."
-                        return
-                    }
                     guard kakao.ensureAccessibilityForOperation() else {
                         store.banner = "시스템 설정에서 공지발송 스위치를 켠 뒤 같은 버튼을 다시 눌러주세요."
                         return
@@ -332,7 +326,7 @@ struct StudentsView: View {
                 TableColumn("이름", value: \.name).width(90)
                 TableColumn("호칭", value: \.nickname).width(90)
                 TableColumn("학교", value: \.school).width(70)
-                TableColumn("학번") { Text(String($0.admissionYear)) }.width(55)
+                TableColumn("학번") { Text(AdmissionYearPolicy.formatted($0.admissionYear)) }.width(55)
                 TableColumn("정확한 톡방 이름", value: \.chatRoomName)
                 TableColumn("chat_id") { Text($0.chatID ?? "—").foregroundStyle(.secondary) }.width(145)
                 TableColumn("") { student in Button("수정") { editing = student }.buttonStyle(.borderless) }.width(45)
@@ -340,7 +334,6 @@ struct StudentsView: View {
         }.padding(20)
         .sheet(isPresented: $adding) { StudentEditor(student: nil) { store.addStudent($0); adding = false } }
         .sheet(item: $editing) { student in StudentEditor(student: student) { store.updateStudent($0); editing = nil } }
-        .sheet(isPresented: $showingOperatingYears) { OperatingAdmissionYearsEditor() }
         .confirmationDialog(
             "선택한 학생 \(selectedStudentIDs.count)명을 삭제할까요?",
             isPresented: $showingDeleteConfirmation,
@@ -387,72 +380,18 @@ struct StudentsView: View {
     }
 }
 
-struct OperatingAdmissionYearsEditor: View {
-    @EnvironmentObject private var store: AppStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var newYear = ""
-
-    private var parsedYear: Int? {
-        let value = newYear.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let year = Int(value), (0...99).contains(year) else { return nil }
-        return year
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("운영 학번 설정").font(.title2.bold())
-            Text("카카오톡 학생 DB 업데이트와 새 반 생성에 사용할 2자리 입학연도입니다.")
-                .foregroundStyle(.secondary)
-            GroupBox("현재 운영 학번") {
-                VStack(spacing: 8) {
-                    if store.operatingAdmissionYears.isEmpty {
-                        Text("설정된 운영 학번이 없습니다.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(store.operatingAdmissionYears, id: \.self) { year in
-                        HStack {
-                            Text(String(format: "%02d학번", year)).font(.headline)
-                            Spacer()
-                            Button(role: .destructive) {
-                                store.setOperatingAdmissionYears(store.operatingAdmissionYears.filter { $0 != year })
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .help("운영 학번에서 제거")
-                        }
-                    }
-                }
-                .padding(8)
-            }
-            HStack {
-                TextField("예: 27", text: $newYear)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
-                Button("학번 추가") { addYear() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(parsedYear == nil || parsedYear.map(store.operatingAdmissionYears.contains) == true)
-                Spacer()
-                Button("닫기") { dismiss() }
-            }
-        }
-        .padding(24)
-        .frame(width: 430, height: 420)
-    }
-
-    private func addYear() {
-        guard let parsedYear else { return }
-        store.setOperatingAdmissionYears(store.operatingAdmissionYears + [parsedYear])
-        newYear = ""
-    }
-}
-
 struct StudentEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var value: Student
+    @State private var admissionYearText: String
     let onSave: (Student) -> Void
     init(student: Student?, onSave: @escaping (Student) -> Void) {
-        _value = State(initialValue: student ?? Student(name: "", nickname: "", school: "", admissionYear: 26, chatRoomName: "")); self.onSave = onSave
+        let initial = student ?? Student(name: "", nickname: "", school: "", admissionYear: Calendar.current.component(.year, from: .now) % 100, chatRoomName: "")
+        _value = State(initialValue: initial)
+        _admissionYearText = State(initialValue: AdmissionYearPolicy.formatted(initial.admissionYear))
+        self.onSave = onSave
     }
+    private var admissionYear: Int? { AdmissionYearPolicy.parseTwoDigit(admissionYearText) }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("학생 정보").font(.title2.bold())
@@ -460,7 +399,7 @@ struct StudentEditor: View {
                 TextField("이름", text: $value.name)
                 LabeledContent("자동 호칭", value: NicknameGenerator.generate(from: value.name))
                 TextField("학교", text: $value.school)
-                TextField("학번", value: $value.admissionYear, format: .number)
+                TextField("학번 (00~99)", text: $admissionYearText)
                 TextField("정확한 톡방 이름", text: $value.chatRoomName)
                 TextField("kmsg chat_id (선택)", text: Binding(
                     get: { value.chatID ?? "" },
@@ -471,7 +410,18 @@ struct StudentEditor: View {
                 ))
                 Toggle("활성", isOn: $value.isActive)
             }
-            HStack { Spacer(); Button("취소") { dismiss() }; Button("저장") { value.nickname = NicknameGenerator.generate(from: value.name); onSave(value) }.buttonStyle(.borderedProminent).disabled(value.name.isEmpty || value.school.isEmpty || value.chatRoomName.isEmpty) }
+            HStack {
+                Spacer()
+                Button("취소") { dismiss() }
+                Button("저장") {
+                    guard let admissionYear else { return }
+                    value.admissionYear = admissionYear
+                    value.nickname = NicknameGenerator.generate(from: value.name)
+                    onSave(value)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(value.name.isEmpty || value.school.isEmpty || value.chatRoomName.isEmpty || admissionYear == nil)
+            }
         }.padding(24).frame(width: 480)
     }
 }
@@ -569,7 +519,7 @@ struct ClassesView: View {
                     }
                     List(candidates) { student in
                         Toggle(isOn: studentSelectionBinding(student.id, selection: $selectedStudents)) {
-                            Text("\(student.school)\(student.admissionYear) · \(student.name) · \(student.chatRoomName)")
+                            Text("\(student.school)\(AdmissionYearPolicy.formatted(student.admissionYear)) · \(student.name) · \(student.chatRoomName)")
                         }
                         .toggleStyle(.checkbox)
                     }
@@ -674,7 +624,7 @@ struct ClassesView: View {
                 (query.isEmpty ||
                  $0.name.localizedCaseInsensitiveContains(query) ||
                  $0.school.localizedCaseInsensitiveContains(query) ||
-                 String($0.admissionYear).contains(query))
+                 AdmissionYearPolicy.formatted($0.admissionYear).contains(query))
             }
             .sorted {
                 $0.school.localizedStandardCompare($1.school) == .orderedAscending ||
@@ -743,7 +693,7 @@ struct ClassCreator: View {
             $0.isActive &&
             $0.school.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(school) == .orderedSame
         }.map(\.admissionYear))
-        return store.operatingAdmissionYears.filter(studentYears.contains)
+        return studentYears.filter(AdmissionYearPolicy.isValid).sorted()
     }
 
     private var filteredStudents: [Student] {
@@ -760,7 +710,7 @@ struct ClassCreator: View {
             }
             Picker("학번", selection: $year) {
                 Text("학번 선택").tag(Int?.none)
-                ForEach(years, id: \.self) { Text(String($0)).tag(Optional($0)) }
+                ForEach(years, id: \.self) { Text(AdmissionYearPolicy.formatted($0)).tag(Optional($0)) }
             }
             .disabled(school.isEmpty)
 

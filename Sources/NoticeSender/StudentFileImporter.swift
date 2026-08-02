@@ -136,17 +136,7 @@ enum StudentFileImporter {
     }
 
     private static func normalizedYear(_ value: String) -> Int? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "")
-        var year: Int
-        if let numeric = Double(trimmed), numeric.rounded() == numeric {
-            year = Int(numeric)
-        } else {
-            let digits = trimmed.filter(\.isNumber)
-            guard let parsed = Int(digits) else { return nil }
-            year = parsed
-        }
-        if year >= 2000 { year %= 100 }
-        return (0...99).contains(year) ? year : nil
+        AdmissionYearPolicy.parseImported(value)
     }
 
     private static func normalizedActiveStatus(_ value: String) -> Bool? {

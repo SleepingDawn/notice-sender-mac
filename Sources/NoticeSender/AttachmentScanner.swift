@@ -46,7 +46,7 @@ enum AttachmentScanner {
         for student in students {
             let school = normalized(student.school)
             let name = normalized(student.name)
-            let shortYear = String(format: "%02d", student.admissionYear)
+            let shortYear = AdmissionYearPolicy.formatted(student.admissionYear)
             let longYear = "20\(shortYear)"
             matches[student.id] = files.filter { url in
                 let filename = normalized(url.deletingPathExtension().lastPathComponent)

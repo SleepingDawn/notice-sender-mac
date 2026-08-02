@@ -64,18 +64,9 @@ final class AppStore: ObservableObject {
             database.schemaVersion = 5
             migratedDatabase = true
         }
-        if database.schemaVersion < 6 {
-            database.operatingAdmissionYears = OperatingAdmissionYearPolicy.defaultYears()
-            database.schemaVersion = 6
-            migratedDatabase = true
-        } else if let configuredYears = database.operatingAdmissionYears {
-            let normalizedYears = OperatingAdmissionYearPolicy.normalized(configuredYears)
-            if configuredYears != normalizedYears {
-                database.operatingAdmissionYears = normalizedYears
-                migratedDatabase = true
-            }
-        } else {
-            database.operatingAdmissionYears = OperatingAdmissionYearPolicy.defaultYears()
+        if database.schemaVersion < 7 || database.operatingAdmissionYears != AdmissionYearPolicy.allYears {
+            database.operatingAdmissionYears = AdmissionYearPolicy.allYears
+            database.schemaVersion = 7
             migratedDatabase = true
         }
         for index in database.classes.indices {
@@ -106,6 +97,10 @@ final class AppStore: ObservableObject {
     }
 
     func addStudent(_ student: Student) {
+        guard AdmissionYearPolicy.isValid(student.admissionYear) else {
+            banner = "학번은 00부터 99까지의 두 자리 숫자여야 합니다."
+            return
+        }
         var normalized = student
         normalized.nickname = NicknameGenerator.generate(from: normalized.name)
         database.students.append(normalized)
@@ -114,6 +109,10 @@ final class AppStore: ObservableObject {
 
     func updateStudent(_ student: Student) {
         guard let index = database.students.firstIndex(where: { $0.id == student.id }) else { return }
+        guard AdmissionYearPolicy.isValid(student.admissionYear) else {
+            banner = "학번은 00부터 99까지의 두 자리 숫자여야 합니다."
+            return
+        }
         var normalized = student
         normalized.nickname = NicknameGenerator.generate(from: normalized.name)
         database.students[index] = normalized
@@ -146,6 +145,10 @@ final class AppStore: ObservableObject {
     }
 
     func createClass(name: String, school: String, year: Int, studentIDs: [UUID]) {
+        guard AdmissionYearPolicy.isValid(year) else {
+            banner = "반 학번은 00부터 99까지의 두 자리 숫자여야 합니다."
+            return
+        }
         let directPresetID = database.presets.first(where: { $0.kind == .direct })?.id
         let members = ClassMemberSorter.sorted(studentIDs.map { ClassMember(studentID: $0) }, students: database.students)
         database.classes.append(ClassGroup(name: name, school: school, admissionYear: year, members: members, defaultPresetID: directPresetID))
@@ -338,16 +341,6 @@ final class AppStore: ObservableObject {
             .map(\.key).sorted()
     }
 
-    var operatingAdmissionYears: [Int] {
-        database.operatingAdmissionYears ?? OperatingAdmissionYearPolicy.defaultYears()
-    }
-
-    func setOperatingAdmissionYears(_ years: [Int]) {
-        database.operatingAdmissionYears = OperatingAdmissionYearPolicy.normalized(years)
-        database.schemaVersion = max(database.schemaVersion, 6)
-        save()
-    }
-
     func academyName(for school: String, fallback: String = "") -> String {
         let configured = database.schoolAcademies?[school]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return configured.isEmpty ? fallback : configured
@@ -444,21 +437,14 @@ final class AppStore: ObservableObject {
 
     func syncStudentsFromKakaoChats() async {
         guard !isSyncingStudentsFromKakao else { return }
-        let allowedYears = Set(operatingAdmissionYears)
-        guard !allowedYears.isEmpty else {
-            banner = "학생 DB에서 운영 학번을 한 개 이상 설정해주세요."
-            return
-        }
         isSyncingStudentsFromKakao = true
-        let yearText = allowedYears.sorted().map { String(format: "%02d", $0) }.joined(separator: ", ")
-        banner = "운영 학번 \(yearText)의 카카오톡 최근 채팅방을 읽고 있습니다. 최대 1,000개까지 확인합니다."
+        banner = "00~99 학번의 카카오톡 최근 채팅방을 읽고 있습니다. 최대 1,000개까지 확인합니다."
         defer { isSyncingStudentsFromKakao = false }
         do {
             let chats = try await KmsgSafeAdapter().listChats(limit: 1_000)
             let output = KakaoStudentDBSynchronizer.synchronize(
                 chats: chats,
-                currentStudents: database.students,
-                allowedAdmissionYears: allowedYears
+                currentStudents: database.students
             )
             database.students = output.students
             save()
@@ -474,12 +460,8 @@ final class AppStore: ObservableObject {
 
     func restoreBackup(from url: URL) throws {
         database = try decoder.decode(AppDatabase.self, from: Data(contentsOf: url))
-        if database.schemaVersion < 6 || database.operatingAdmissionYears == nil {
-            database.operatingAdmissionYears = OperatingAdmissionYearPolicy.defaultYears()
-            database.schemaVersion = max(database.schemaVersion, 6)
-        } else {
-            database.operatingAdmissionYears = OperatingAdmissionYearPolicy.normalized(database.operatingAdmissionYears ?? [])
-        }
+        database.operatingAdmissionYears = AdmissionYearPolicy.allYears
+        database.schemaVersion = max(database.schemaVersion, 7)
         currentBatch = nil
         validationIssues = []
         save()
