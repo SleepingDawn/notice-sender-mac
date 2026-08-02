@@ -161,6 +161,32 @@ final class AppStore: ObservableObject {
         save()
     }
 
+    @discardableResult
+    func renameClass(id: UUID, to rawName: String) -> Bool {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            banner = "반 이름은 비워둘 수 없습니다."
+            return false
+        }
+        guard !database.classes.contains(where: { $0.id != id && $0.name == name }) else {
+            banner = "같은 이름의 반이 이미 있습니다."
+            return false
+        }
+        guard let index = database.classes.firstIndex(where: { $0.id == id }) else {
+            banner = "이름을 변경할 반을 찾을 수 없습니다."
+            return false
+        }
+        guard database.classes[index].name != name else {
+            banner = "반 이름이 변경되지 않았습니다."
+            return true
+        }
+        var renamed = database.classes[index]
+        renamed.name = name
+        updateClass(renamed)
+        banner = "반 이름을 ‘\(name)’으로 변경했습니다."
+        return true
+    }
+
     func deleteClass(id: UUID) {
         database.classes.removeAll { $0.id == id }
         if selectedClassID == id { selectedClassID = nil }

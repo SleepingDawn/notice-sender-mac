@@ -203,6 +203,29 @@ enum SelfTest {
             let namesByID = Dictionary(uniqueKeysWithValues: [studentC, studentA, studentB].map { ($0.id, $0.name) })
             return sorted.compactMap { namesByID[$0.studentID] } == ["김길동", "박하연", "이민준"]
         }
+        check("반 이름 편집 시 ID·명단·Preset 유지", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-class-rename-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let student = Student(name: "김길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "길동방")
+            let group = ClassGroup(name: "변경 전", school: "한성", admissionYear: 25, members: [ClassMember(studentID: student.id)], defaultPresetID: DefaultPresets.direct.id, version: 3)
+            let other = ClassGroup(name: "기존 반", school: "세종", admissionYear: 26)
+            let store = AppStore(databaseURL: root.appendingPathComponent("database.json"))
+            store.database = AppDatabase(students: [student], classes: [group, other], presets: DefaultPresets.all)
+            let renamed = store.renameClass(id: group.id, to: "  변경 후  ")
+            guard let result = store.group(id: group.id) else { return false }
+            let duplicateRejected = !store.renameClass(id: group.id, to: other.name)
+            let emptyRejected = !store.renameClass(id: group.id, to: "  \n ")
+            return renamed
+                && result.name == "변경 후"
+                && result.id == group.id
+                && result.members == group.members
+                && result.defaultPresetID == group.defaultPresetID
+                && result.version == 4
+                && duplicateRejected
+                && emptyRejected
+                && store.group(id: group.id)?.name == "변경 후"
+        }
         check("반 JSON 파일 다른 DB 왕복·학생 연결", failures: &failures) {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-class-archive-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

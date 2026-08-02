@@ -483,6 +483,8 @@ struct ClassesView: View {
     @State private var selectedStudents = Set<UUID>()
     @State private var studentSearch = ""
     @State private var deletionRequest: ClassDeletionRequest?
+    @State private var showingRenameClass = false
+    @State private var renameClassText = ""
 
     var body: some View {
         GeometryReader { geometry in
@@ -506,6 +508,12 @@ struct ClassesView: View {
                     VStack(alignment: .leading) { Text(group.name); Text("\(group.members.count)명 · v\(group.version)").font(.caption).foregroundStyle(.secondary) }.tag(group.id)
                 }
                 HStack {
+                    Button("이름 편집") {
+                        guard let group = store.database.classes.first(where: { $0.id == selectedID }) else { return }
+                        renameClassText = group.name
+                        showingRenameClass = true
+                    }
+                    .disabled(selectedID == nil)
                     Button("선택 반 삭제", role: .destructive) {
                         guard let group = store.database.classes.first(where: { $0.id == selectedID }) else { return }
                         deletionRequest = .selected(id: group.id, name: group.name)
@@ -584,6 +592,19 @@ struct ClassesView: View {
         }
         .onChange(of: selectedID) { _, _ in selectedStudents.removeAll() }
         .sheet(isPresented: $creating) { ClassCreator { name, school, year, ids in store.createClass(name: name, school: school, year: year, studentIDs: ids); creating = false } }
+        .alert("반 이름 편집", isPresented: $showingRenameClass) {
+            TextField("반 이름", text: $renameClassText)
+            Button("취소", role: .cancel) { }
+            Button("저장") {
+                guard let selectedID else { return }
+                if !store.renameClass(id: selectedID, to: renameClassText) {
+                    NSSound.beep()
+                }
+            }
+            .disabled(renameClassText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("반 ID, 학생 명단과 기본 Preset은 그대로 유지됩니다.")
+        }
         .confirmationDialog(
             deletionRequest?.title ?? "반 삭제",
             isPresented: Binding(
