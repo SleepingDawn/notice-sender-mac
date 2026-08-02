@@ -384,20 +384,39 @@ struct StudentEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var value: Student
     @State private var admissionYearText: String
+    @State private var nicknameWasManuallyEdited: Bool
     let onSave: (Student) -> Void
     init(student: Student?, onSave: @escaping (Student) -> Void) {
-        let initial = student ?? Student(name: "", nickname: "", school: "", admissionYear: Calendar.current.component(.year, from: .now) % 100, chatRoomName: "")
+        var initial = student ?? Student(name: "", nickname: "", school: "", admissionYear: Calendar.current.component(.year, from: .now) % 100, chatRoomName: "")
+        let generatedNickname = NicknameGenerator.generate(from: initial.name)
+        initial.nickname = NicknameGenerator.resolved(name: initial.name, enteredNickname: initial.nickname)
         _value = State(initialValue: initial)
         _admissionYearText = State(initialValue: AdmissionYearPolicy.formatted(initial.admissionYear))
+        _nicknameWasManuallyEdited = State(initialValue: student != nil && initial.nickname != generatedNickname)
         self.onSave = onSave
     }
     private var admissionYear: Int? { AdmissionYearPolicy.parseTwoDigit(admissionYearText) }
+    private var nicknameBinding: Binding<String> {
+        Binding(
+            get: { value.nickname },
+            set: {
+                value.nickname = $0
+                nicknameWasManuallyEdited = true
+            }
+        )
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("학생 정보").font(.title2.bold())
             Form {
                 TextField("이름", text: $value.name)
-                LabeledContent("자동 호칭", value: NicknameGenerator.generate(from: value.name))
+                HStack {
+                    TextField("호칭", text: nicknameBinding)
+                    Button("자동값 사용") {
+                        value.nickname = NicknameGenerator.generate(from: value.name)
+                        nicknameWasManuallyEdited = false
+                    }
+                }
                 TextField("학교", text: $value.school)
                 TextField("학번 (00~99)", text: $admissionYearText)
                 TextField("정확한 톡방 이름", text: $value.chatRoomName)
@@ -416,13 +435,20 @@ struct StudentEditor: View {
                 Button("저장") {
                     guard let admissionYear else { return }
                     value.admissionYear = admissionYear
-                    value.nickname = NicknameGenerator.generate(from: value.name)
+                    value.nickname = NicknameGenerator.resolved(name: value.name, enteredNickname: value.nickname)
                     onSave(value)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(value.name.isEmpty || value.school.isEmpty || value.chatRoomName.isEmpty || admissionYear == nil)
             }
-        }.padding(24).frame(width: 480)
+        }
+        .padding(24)
+        .frame(width: 480)
+        .onChange(of: value.name) { _, newName in
+            if !nicknameWasManuallyEdited {
+                value.nickname = NicknameGenerator.generate(from: newName)
+            }
+        }
     }
 }
 

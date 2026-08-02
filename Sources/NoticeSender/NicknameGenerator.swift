@@ -15,4 +15,10 @@ enum NicknameGenerator {
         let hasFinalConsonant = (0xAC00...0xD7A3).contains(value) && ((value - 0xAC00) % 28 != 0)
         return hasFinalConsonant ? base + "이" : base
     }
+
+    /// Keeps a user-entered nickname and falls back to the generated default only when blank.
+    static func resolved(name: String, enteredNickname: String) -> String {
+        let entered = enteredNickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        return entered.isEmpty ? generate(from: name) : entered
+    }
 }

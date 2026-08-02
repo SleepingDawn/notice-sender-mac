@@ -380,7 +380,23 @@ enum SelfTest {
         check("받침·알파벳 호칭 규칙", failures: &failures) {
             NicknameGenerator.generate(from: "김영준A") == "영준이" &&
             NicknameGenerator.generate(from: "구승모B") == "승모" &&
-            NicknameGenerator.generate(from: "박하연") == "하연이"
+            NicknameGenerator.generate(from: "박하연") == "하연이" &&
+            NicknameGenerator.resolved(name: "김영준A", enteredNickname: "") == "영준이" &&
+            NicknameGenerator.resolved(name: "김영준A", enteredNickname: "  준이 형  ") == "준이 형"
+        }
+        check("학생 추가·수정 사용자 호칭 보존", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-custom-nickname-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = AppStore(databaseURL: root.appendingPathComponent("database.json"))
+            let custom = Student(name: "김영준A", nickname: "준이 형", school: "한성", admissionYear: 25, chatRoomName: "영준방")
+            let automatic = Student(name: "구승모B", nickname: "", school: "한성", admissionYear: 25, chatRoomName: "승모방")
+            store.addStudent(custom)
+            store.addStudent(automatic)
+            guard var edited = store.database.students.first(where: { $0.id == custom.id }) else { return false }
+            edited.nickname = "영준 학생"
+            store.updateStudent(edited)
+            return store.database.students.first(where: { $0.id == custom.id })?.nickname == "영준 학생"
+                && store.database.students.first(where: { $0.id == automatic.id })?.nickname == "승모"
         }
         check("수업 관리 저장 데이터 왕복", failures: &failures) {
             let plan = LessonPlan(classID: UUID(), presetID: UUID(), progress: "진도", assignment: "숙제", examUnit: "시험", notice: "공지")

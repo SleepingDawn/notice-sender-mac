@@ -102,7 +102,7 @@ final class AppStore: ObservableObject {
             return
         }
         var normalized = student
-        normalized.nickname = NicknameGenerator.generate(from: normalized.name)
+        normalized.nickname = NicknameGenerator.resolved(name: normalized.name, enteredNickname: normalized.nickname)
         database.students.append(normalized)
         save()
     }
@@ -114,7 +114,7 @@ final class AppStore: ObservableObject {
             return
         }
         var normalized = student
-        normalized.nickname = NicknameGenerator.generate(from: normalized.name)
+        normalized.nickname = NicknameGenerator.resolved(name: normalized.name, enteredNickname: normalized.nickname)
         database.students[index] = normalized
         for classIndex in database.classes.indices {
             database.classes[classIndex].members = ClassMemberSorter.sorted(database.classes[classIndex].members, students: database.students)
