@@ -69,6 +69,10 @@ final class AppStore: ObservableObject {
             database.schemaVersion = 7
             migratedDatabase = true
         }
+        if database.schemaVersion < 8 {
+            database.schemaVersion = 8
+            migratedDatabase = true
+        }
         for index in database.classes.indices {
             let sortedMembers = ClassMemberSorter.sorted(database.classes[index].members, students: database.students)
             if database.classes[index].members != sortedMembers {
@@ -548,6 +552,10 @@ final class AppStore: ObservableObject {
         try StudentDatabaseCSV.write(students: database.students, to: url)
     }
 
+    func exportSendLogCSV(to url: URL) throws {
+        try SendLogCSV.write(logs: database.logs, to: url)
+    }
+
     func syncStudentsFromKakaoChats() async {
         guard !isSyncingStudentsFromKakao else { return }
         isSyncingStudentsFromKakao = true
@@ -574,7 +582,7 @@ final class AppStore: ObservableObject {
     func restoreBackup(from url: URL) throws {
         database = try decoder.decode(AppDatabase.self, from: Data(contentsOf: url))
         database.operatingAdmissionYears = AdmissionYearPolicy.allYears
-        database.schemaVersion = max(database.schemaVersion, 7)
+        database.schemaVersion = max(database.schemaVersion, 8)
         currentBatch = nil
         validationIssues = []
         save()
@@ -591,6 +599,7 @@ final class AppStore: ObservableObject {
             sentAt: .now,
             result: result,
             messageSHA256: digest,
+            messages: item.allMessages,
             detail: detail
         ), at: 0)
         save()

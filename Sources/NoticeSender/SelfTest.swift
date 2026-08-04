@@ -28,7 +28,7 @@ enum SelfTest {
             try encoder.encode(oldDatabase).write(to: file)
             let migrated = AppStore(databaseURL: file).database
             guard let direct = migrated.presets.first(where: { $0.kind == .direct }), let testClass = migrated.classes.first(where: { $0.name == "테스트" }) else { return false }
-            return migrated.schemaVersion == 7
+            return migrated.schemaVersion == 8
                 && testClass.defaultPresetID == direct.id
                 && migrated.operatingAdmissionYears == AdmissionYearPolicy.allYears
         }
@@ -54,7 +54,7 @@ enum SelfTest {
             let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(oldDatabase).write(to: file)
             let migrated = AppStore(databaseURL: file).database
-            return migrated.schemaVersion == 7
+            return migrated.schemaVersion == 8
                 && migrated.operatingAdmissionYears == AdmissionYearPolicy.allYears
         }
         check("테스트 반 학생별 직접 문구 발송 목록", failures: &failures) {
@@ -212,6 +212,64 @@ enum SelfTest {
                 && record.nicknameProvided
                 && record.chatIDProvided
                 && record.statusProvided
+        }
+        check("발송 기록 CSV Excel 호환·전체 필드 보존", failures: &failures) {
+            let log = SendLog(
+                id: UUID(uuidString: "90E66829-1883-4200-8463-C8FE3E14B36D")!,
+                batchID: UUID(uuidString: "54D143CA-FC93-407D-BA0D-7993C1580F0A")!,
+                studentID: UUID(uuidString: "D0E5407C-FC51-4186-A2E5-E2FE658D75D5")!,
+                studentName: "김\"학생",
+                chatRoomName: "세종26, 김학생 방",
+                sentAt: Date(timeIntervalSince1970: 0),
+                result: .failed,
+                messageSHA256: String(repeating: "a", count: 64),
+                messages: ["학생별 공지\n둘째 줄", "공통 메시지"],
+                detail: "첫 줄\n둘째 줄"
+            )
+            let data = SendLogCSV.data(logs: [log])
+            guard data.starts(with: [0xEF, 0xBB, 0xBF]),
+                  var text = String(data: data, encoding: .utf8)
+            else { return false }
+            if text.first == "\u{feff}" { text.removeFirst() }
+            let rows = StudentFileImporter.parseDelimited(text, delimiter: ",")
+            guard rows.count == 2 else { return false }
+            return rows[0] == SendLogCSV.headers
+                && rows[1] == [
+                    log.id.uuidString.lowercased(),
+                    log.batchID.uuidString.lowercased(),
+                    log.studentID.uuidString.lowercased(),
+                    "1970-01-01T00:00:00.000Z",
+                    "실패",
+                    "김\"학생",
+                    "세종26, 김학생 방",
+                    String(repeating: "a", count: 64),
+                    "학생별 공지\n둘째 줄",
+                    "공통 메시지",
+                    "",
+                    "",
+                    "",
+                    "첫 줄\n둘째 줄",
+                ]
+        }
+        check("발송 기록에 공지 본문 발송 순서 보존", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-log-message-\(UUID().uuidString)", isDirectory: true)
+            let file = root.appendingPathComponent("database.json")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let studentID = UUID()
+            let item = BatchItem(
+                studentID: studentID,
+                studentName: "김학생",
+                nickname: "학생이",
+                chatRoomName: "김학생 방",
+                message: "학생별 공지",
+                additionalMessages: ["공통 메시지"]
+            )
+            let store = AppStore(databaseURL: file)
+            store.log(item: item, batchID: UUID(), result: .sent, detail: nil)
+            guard store.database.logs.first?.messages == ["학생별 공지", "공통 메시지"] else { return false }
+            let restored = AppStore(databaseURL: file)
+            return restored.database.logs.first?.messages == ["학생별 공지", "공통 메시지"]
         }
         check("학교별 Academy 양식 적용", failures: &failures) {
             let student = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "테스트방")

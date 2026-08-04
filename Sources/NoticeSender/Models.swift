@@ -276,6 +276,8 @@ struct SendLog: Codable, Identifiable, Hashable, Sendable {
     var sentAt: Date
     var result: BatchItemStatus
     var messageSHA256: String
+    /// Exact messages sent in order. Older records decode this as nil because their bodies weren't stored.
+    var messages: [String]? = nil
     var detail: String?
 }
 
@@ -293,7 +295,7 @@ struct LessonPlan: Codable, Identifiable, Hashable, Sendable {
 }
 
 struct AppDatabase: Codable, Sendable {
-    var schemaVersion: Int = 7
+    var schemaVersion: Int = 8
     var students: [Student] = []
     var classes: [ClassGroup] = []
     var presets: [MessagePreset] = DefaultPresets.all
@@ -303,7 +305,7 @@ struct AppDatabase: Codable, Sendable {
     /// Optional to preserve compatibility with databases created before lesson management.
     var lessonPlans: [LessonPlan]? = nil
     var attachmentRootPath: String? = nil
-    /// Legacy compatibility field. Schema 7 always stores every two-digit cohort (00...99).
+    /// Legacy compatibility field. Schema 7 and later store every two-digit cohort (00...99).
     var operatingAdmissionYears: [Int]? = nil
 }
 

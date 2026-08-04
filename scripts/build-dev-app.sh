@@ -4,8 +4,19 @@ set -euo pipefail
 ROOT="${0:A:h:h}"
 cd "$ROOT"
 
+SWIFT_COMPATIBILITY_FLAGS=()
+SWIFT_VERSION="$(/usr/bin/swift --version 2>/dev/null | /usr/bin/head -n 1)"
+SDK_SWIFT_INTERFACE="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)/usr/lib/swift/Swift.swiftmodule/arm64e-apple-macos.swiftinterface"
+if [[ "$SWIFT_VERSION" == *"swiftlang-6.3.3"* ]] \
+    && [[ -f "$SDK_SWIFT_INTERFACE" ]] \
+    && /usr/bin/grep -q "swiftlang-6.3.2" "$SDK_SWIFT_INTERFACE"; then
+  # CLT 26.6 can temporarily pair Swift 6.3.3 with a 6.3.2 macOS SDK.
+  SWIFT_COMPATIBILITY_FLAGS=(-Xswiftc -Xfrontend -Xswiftc -disable-deserialization-safety)
+fi
+
 SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-$ROOT/.build/dev-module-cache}" \
-  swift build -c debug --disable-sandbox
+CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$ROOT/.build/dev-clang-module-cache}" \
+  swift build -c debug --disable-sandbox "${SWIFT_COMPATIBILITY_FLAGS[@]}"
 
 APP="$ROOT/dist/TEST_공지.app"
 EXECUTABLE="TEST_NoticeSender"

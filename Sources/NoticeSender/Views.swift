@@ -2002,8 +2002,12 @@ struct LogsView: View {
     @EnvironmentObject private var store: AppStore
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("발송 기록").font(.largeTitle.bold())
-            Text("공지 본문은 저장하지 않습니다. SHA-256 해시는 동일한 메시지였는지 확인하기 위한 값입니다.").foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                Text("발송 기록").font(.largeTitle.bold())
+                Spacer()
+                Button("전체 기록 CSV 내보내기") { exportSendLogs() }
+            }
+            Text("이 버전부터 공지 본문을 발송 순서대로 기록합니다. 이전 버전에서 생성한 기록에는 본문이 없습니다.").foregroundStyle(.secondary)
             Table(store.database.logs) {
                 TableColumn("시각") { Text($0.sentAt, format: .dateTime.year().month().day().hour().minute().second()) }.width(160)
                 TableColumn("결과") { Text($0.result.rawValue) }.width(100)
@@ -2013,6 +2017,19 @@ struct LogsView: View {
                 TableColumn("상세") { Text($0.detail ?? "") }.width(min: 180)
             }
         }.padding(20)
+    }
+
+    private func exportSendLogs() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "notice-sender-send-logs.csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try store.exportSendLogCSV(to: url)
+            store.banner = "발송 기록 \(store.database.logs.count)건을 CSV로 저장했습니다."
+        } catch {
+            store.banner = "발송 기록 CSV 내보내기 실패: \(error.localizedDescription)"
+        }
     }
 }
 
