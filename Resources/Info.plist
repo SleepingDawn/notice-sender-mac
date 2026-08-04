@@ -9,8 +9,8 @@
     <key>CFBundleName</key><string>공지발송</string>
     <key>CFBundleDisplayName</key><string>공지발송</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>2.7.0</string>
-    <key>CFBundleVersion</key><string>46</string>
+    <key>CFBundleShortVersionString</key><string>3.0.0</string>
+    <key>CFBundleVersion</key><string>47</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
     <key>NSHighResolutionCapable</key><true/>
