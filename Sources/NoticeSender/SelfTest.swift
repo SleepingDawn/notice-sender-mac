@@ -426,6 +426,39 @@ enum SelfTest {
             let result = try AttachmentScanner.scan(rootPath: root.path, students: [student])
             return result.scannedFileCount == 3 && result.filesByStudentID[student.id]?.count == 2
         }
+        check("첨부파일 최대 깊이 3·모든 일반 파일 허용", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-attachment-depth-\(UUID().uuidString)", isDirectory: true)
+            let depth1 = root.appendingPathComponent("1", isDirectory: true)
+            let depth2 = depth1.appendingPathComponent("2", isDirectory: true)
+            let depth3 = depth2.appendingPathComponent("3", isDirectory: true)
+            try FileManager.default.createDirectory(at: depth3, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let student = Student(name: "윤서진A", nickname: "서진이", school: "한성", admissionYear: 25, chatRoomName: "서진A방")
+            let depth1File = depth1.appendingPathComponent("한성25윤서진A_자료.txt")
+            let depth3File = depth2.appendingPathComponent("한성25윤서진A_성적표.xlsx")
+            let depth4File = depth3.appendingPathComponent("한성25윤서진A_제외.pdf")
+            try Data("1".utf8).write(to: depth1File)
+            try Data("3".utf8).write(to: depth3File)
+            try Data("4".utf8).write(to: depth4File)
+            let result = try AttachmentScanner.scan(rootPath: root.path, students: [student])
+            let names = result.filesByStudentID[student.id]?.map(\.lastPathComponent) ?? []
+            return result.scannedFileCount == 2
+                && Set(names) == Set([depth1File.lastPathComponent, depth3File.lastPathComponent])
+        }
+        check("동명이인 알파벳 이름으로 첨부 구분", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-attachment-suffix-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let base = Student(name: "윤서진", nickname: "서진이", school: "한성", admissionYear: 25, chatRoomName: "서진방")
+            let studentA = Student(name: "윤서진A", nickname: "서진A", school: "한성", admissionYear: 25, chatRoomName: "서진A방")
+            let studentB = Student(name: "윤서진B", nickname: "서진B", school: "한성", admissionYear: 25, chatRoomName: "서진B방")
+            try Data("a".utf8).write(to: root.appendingPathComponent("한성_2025_윤서진A_결과.pdf"))
+            try Data("b".utf8).write(to: root.appendingPathComponent("한성_25_윤서진B_결과.jpg"))
+            let result = try AttachmentScanner.scan(rootPath: root.path, students: [base, studentA, studentB])
+            return result.filesByStudentID[base.id]?.isEmpty == true
+                && result.filesByStudentID[studentA.id]?.count == 1
+                && result.filesByStudentID[studentB.id]?.count == 1
+        }
         check("일부 학생에게만 첨부파일 할당", failures: &failures) {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-partial-attachment-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -454,6 +487,20 @@ enum SelfTest {
                 && items[1].attachmentPaths?.map { URL(fileURLWithPath: $0).lastPathComponent } == [targetFile.lastPathComponent]
                 && items[2].attachmentPaths?.isEmpty == true
                 && !issues.contains { $0.severity == .error }
+        }
+        check("첨부 대상 학생 미리보기·발송 확인 문구", failures: &failures) {
+            let students = [
+                Student(name: "윤서진A", nickname: "서진A", school: "한성", admissionYear: 25, chatRoomName: "서진A방"),
+                Student(name: "윤서진B", nickname: "서진B", school: "한성", admissionYear: 25, chatRoomName: "서진B방"),
+                Student(name: "박하연", nickname: "하연이", school: "한성", admissionYear: 25, chatRoomName: "하연방"),
+            ]
+            let items = [
+                BatchItem(studentID: students[0].id, studentName: students[0].name, nickname: students[0].nickname, chatRoomName: students[0].chatRoomName, message: "공지", attachmentPaths: ["/tmp/a.pdf", "/tmp/b.txt"]),
+                BatchItem(studentID: students[1].id, studentName: students[1].name, nickname: students[1].nickname, chatRoomName: students[1].chatRoomName, message: "공지", attachmentPaths: ["/tmp/c.jpg"]),
+                BatchItem(studentID: students[2].id, studentName: students[2].name, nickname: students[2].nickname, chatRoomName: students[2].chatRoomName, message: "공지", attachmentPaths: []),
+            ]
+            return AttachmentDeliveryNotice.preview(studentName: students[0].name, paths: items[0].attachmentPaths ?? []) == "윤서진A 학생에게 2개 파일이 전송됩니다."
+                && AttachmentDeliveryNotice.confirmation(in: items) == "[윤서진A, 윤서진B]에게 파일이 함께 발송됩니다."
         }
         check("공통 메시지 최대 5개 개별 유지", failures: &failures) {
             let student = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "테스트방")

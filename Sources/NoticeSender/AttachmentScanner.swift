@@ -20,6 +20,9 @@ enum AttachmentScannerError: LocalizedError {
 }
 
 enum AttachmentScanner {
+    /// The selected root is depth 0. Files below it are inspected through depth 3.
+    static let maximumDepth = 3
+
     static func scan(rootPath: String, students: [Student]) throws -> AttachmentScanResult {
         let expanded = NSString(string: rootPath.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
         guard !expanded.isEmpty else { throw AttachmentScannerError.emptyPath }
@@ -28,7 +31,7 @@ enum AttachmentScanner {
             throw AttachmentScannerError.notDirectory
         }
         let root = URL(fileURLWithPath: expanded, isDirectory: true)
-        let keys: [URLResourceKey] = [.isRegularFileKey, .isHiddenKey, .isSymbolicLinkKey]
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isHiddenKey, .isSymbolicLinkKey]
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: keys,
@@ -39,24 +42,83 @@ enum AttachmentScanner {
         var files: [URL] = []
         for case let url as URL in enumerator {
             let values = try? url.resourceValues(forKeys: Set(keys))
-            guard values?.isRegularFile == true, values?.isHidden != true, values?.isSymbolicLink != true else { continue }
+            if values?.isSymbolicLink == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            if enumerator.level >= maximumDepth, values?.isDirectory == true {
+                enumerator.skipDescendants()
+            }
+            guard enumerator.level <= maximumDepth,
+                  values?.isRegularFile == true,
+                  values?.isHidden != true
+            else { continue }
             files.append(url)
         }
-        var matches: [UUID: [URL]] = [:]
-        for student in students {
-            let school = normalized(student.school)
-            let name = normalized(student.name)
-            let shortYear = AdmissionYearPolicy.formatted(student.admissionYear)
-            let longYear = "20\(shortYear)"
-            matches[student.id] = files.filter { url in
-                let filename = normalized(url.deletingPathExtension().lastPathComponent)
-                return filename.contains(school) && filename.contains(name) && (filename.contains(shortYear) || filename.contains(longYear))
-            }.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+
+        let identities = students.map { student in
+            (
+                id: student.id,
+                school: normalized(student.school),
+                name: normalized(student.name),
+                shortYear: AdmissionYearPolicy.formatted(student.admissionYear)
+            )
+        }
+        var matches = Dictionary(uniqueKeysWithValues: students.map { ($0.id, [URL]()) })
+        for file in files {
+            let filename = normalized(file.deletingPathExtension().lastPathComponent)
+            let candidates = identities.filter { identity in
+                guard !identity.school.isEmpty, !identity.name.isEmpty else { return false }
+                let longYear = "20\(identity.shortYear)"
+                return filename.contains(identity.school)
+                    && filename.contains(identity.name)
+                    && (filename.contains(identity.shortYear) || filename.contains(longYear))
+            }
+
+            // If both `윤서진` and `윤서진A` exist, a file containing 윤서진A
+            // belongs only to the explicitly suffixed identity. Unrelated names
+            // can still share a file when every required identity token is present.
+            let resolved = candidates.filter { candidate in
+                !candidates.contains { other in
+                    other.id != candidate.id
+                        && other.name.count > candidate.name.count
+                        && other.name.hasPrefix(candidate.name)
+                }
+            }
+            for candidate in resolved {
+                matches[candidate.id, default: []].append(file)
+            }
+        }
+        for studentID in Array(matches.keys) {
+            matches[studentID]?.sort {
+                $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+            }
         }
         return AttachmentScanResult(filesByStudentID: matches, scannedFileCount: files.count)
     }
 
     private static func normalized(_ value: String) -> String {
         value.precomposedStringWithCanonicalMapping.lowercased().filter { !$0.isWhitespace }
+    }
+}
+
+enum AttachmentDeliveryNotice {
+    static func preview(studentName: String, paths: [String]) -> String? {
+        guard !paths.isEmpty else { return nil }
+        return "\(studentName) 학생에게 \(paths.count)개 파일이 전송됩니다."
+    }
+
+    static func matchedStudentNames(in items: [BatchItem]) -> [String] {
+        var seen: Set<UUID> = []
+        return items.compactMap { item in
+            guard !(item.attachmentPaths ?? []).isEmpty, seen.insert(item.studentID).inserted else { return nil }
+            return item.studentName
+        }
+    }
+
+    static func confirmation(in items: [BatchItem]) -> String? {
+        let names = matchedStudentNames(in: items)
+        guard !names.isEmpty else { return nil }
+        return "[\(names.joined(separator: ", "))]에게 파일이 함께 발송됩니다."
     }
 }

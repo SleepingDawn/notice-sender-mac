@@ -191,7 +191,7 @@ struct BatchItem: Codable, Identifiable, Hashable, Sendable {
     var error: String?
     /// Messages after the first one. Total messages are capped at five.
     var additionalMessages: [String]? = nil
-    /// Absolute paths selected by the recursive attachment scanner.
+    /// Absolute paths selected by the depth-limited attachment scanner.
     var attachmentPaths: [String]? = nil
     /// Direct-input messages preserve every character except the explicitly removed quote pair.
     var preserveMessageWhitespace: Bool? = nil

@@ -900,6 +900,12 @@ struct LessonManagementView: View {
     @State private var lessonSelectionRevision = 0
     @State private var showingMissingNicknameWarning = false
     @State private var missingNicknameIssues: [DirectNoticeNicknameIssue] = []
+    @State private var lessonAttachmentPaths: [UUID: [String]] = [:]
+    @State private var lessonAttachmentScannedFileCount = 0
+    @State private var isScanningLessonAttachments = false
+    @State private var lessonAttachmentScanError: String?
+    @State private var pendingLessonBatch: SendBatch?
+    @State private var showingLessonAttachmentConfirmation = false
 
     private var group: ClassGroup? { store.database.classes.first { $0.id == draft.classID } }
     private var preset: MessagePreset? { store.database.presets.first { $0.id == draft.presetID } }
@@ -977,6 +983,23 @@ struct LessonManagementView: View {
         }
     }
 
+    private var lessonAttachmentScanKey: String {
+        let root = (store.database.attachmentRootPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return ([root] + previewRows.map { $0.studentID.uuidString }).joined(separator: "|")
+    }
+
+    private var lessonAttachmentCount: Int {
+        previewRows.reduce(0) { $0 + (lessonAttachmentPaths[$1.studentID]?.count ?? 0) }
+    }
+
+    private var lessonAttachmentStudentCount: Int {
+        previewRows.filter { !(lessonAttachmentPaths[$0.studentID] ?? []).isEmpty }.count
+    }
+
+    private var includedPerformanceRowCount: Int {
+        PreparedNoticeSelection.includedRows(performanceRows).count
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -1035,7 +1058,7 @@ struct LessonManagementView: View {
                     HStack {
                         Text("마우스로 셀 범위를 드래그 선택합니다. ⌘C/⌘V로 Excel·Google Sheet처럼 복사·붙여넣고, 더블클릭하면 한 셀을 편집합니다.").font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Text("발송 \(PreparedNoticeSelection.includedRows(performanceRows).count)/\(performanceRows.count)명")
+                        Text("발송 \(includedPerformanceRowCount)/\(performanceRows.count)명")
                             .font(.caption).foregroundStyle(.secondary)
                         Button("전체 선택") { setAllPerformanceRowsIncluded(true) }
                             .disabled(performanceRows.allSatisfy(\.isIncluded) || kakao.isBusy || isPreparingSend)
@@ -1049,9 +1072,46 @@ struct LessonManagementView: View {
                     performanceGrid
                 }.padding(6)
             }
+            lessonPreviewSection
+        }.padding(20)
+        .onAppear { ensureDraft(); rebuildPerformanceRows() }
+        .onChange(of: performanceRows.map(\.isIncluded)) { _, _ in
+            invalidateLessonBatchForSelectionChange()
+        }
+        .onChange(of: draft.classID) { _, newClassID in
+            handleLessonClassChange(newClassID)
+        }
+        .onChange(of: group?.version) { oldVersion, newVersion in
+            guard oldVersion != newVersion else { return }
+            rebuildPerformanceRows()
+        }
+        .task(id: lessonAttachmentScanKey) {
+            await scanLessonAttachmentsForPreview()
+        }
+        .alert("공지 문구에 학생 호칭이 없습니다", isPresented: $showingMissingNicknameWarning) {
+            Button("돌아가서 직접 확인", role: .cancel) { }
+            Button("무시하고 직접 보내기", role: .destructive) { sendLessonNow() }
+        } message: {
+            Text("아래 학생은 자신의 호칭이 공지 문구에 포함되어 있지 않습니다. Google Sheet의 행과 문구가 맞는지 확인하세요.\n\n\(missingNicknameWarningText)")
+        }
+        .alert("첨부파일 발송 확인", isPresented: $showingLessonAttachmentConfirmation) {
+            Button("뒤로가기", role: .cancel) { pendingLessonBatch = nil }
+            Button("보내기", role: .destructive) {
+                guard let batch = pendingLessonBatch else { return }
+                pendingLessonBatch = nil
+                Task { await kakao.send(batch: batch, dryRun: false, store: store) }
+            }
+        } message: {
+            Text(AttachmentDeliveryNotice.confirmation(in: pendingLessonBatch?.items ?? []) ?? "")
+        }
+    }
+
+    private var lessonPreviewSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("학생별 최종 문구 · \(previewRows.count)명").font(.headline)
                 Spacer()
+                lessonAttachmentStatus
                 if let group, let preset {
                     Text(preset.kind == .direct ? "\(group.school) · 학생별 공지 멘트 사용" : "\(group.school) → \(store.academyName(for: group.school, fallback: preset.academyName))")
                         .foregroundStyle(.secondary)
@@ -1066,34 +1126,65 @@ struct LessonManagementView: View {
                         .lineLimit(3)
                         .foregroundStyle(row.error == nil ? Color.primary : Color.red)
                         .help(display)
-                }.width(min: 500)
+                }.width(min: 410)
+                TableColumn("첨부 안내") { row in
+                    let paths = lessonAttachmentPaths[row.studentID] ?? []
+                    Text(AttachmentDeliveryNotice.preview(studentName: row.studentName, paths: paths) ?? "없음")
+                        .foregroundStyle(paths.isEmpty ? Color.secondary : Color.blue)
+                        .help(paths.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: "\n"))
+                }.width(min: 190)
             }.frame(height: 210)
-            GroupBox("선택 학생 전체 메시지") {
-                if let id = selectedPreviewStudentID, let row = previewRows.first(where: { $0.studentID == id }) {
-                    ScrollView { Text(row.error ?? row.message).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(8) }
-                } else { Text("학생 행을 클릭하면 잘리지 않은 전체 메시지가 표시됩니다.").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(8) }
-            }.frame(height: 190)
-        }.padding(20)
-        .onAppear { ensureDraft(); rebuildPerformanceRows() }
-        .onChange(of: performanceRows.map(\.isIncluded)) { _, _ in
-            invalidateLessonBatchForSelectionChange()
+            selectedLessonMessage
         }
-        .onChange(of: draft.classID) { _, newClassID in
-            if let defaultID = store.database.classes.first(where: { $0.id == newClassID })?.defaultPresetID,
-               store.database.presets.contains(where: { $0.id == defaultID }) { draft.presetID = defaultID }
-            else if let directID = store.database.presets.first(where: { $0.kind == .direct })?.id { draft.presetID = directID }
-            rebuildPerformanceRows()
+    }
+
+    @ViewBuilder
+    private var lessonAttachmentStatus: some View {
+        if isScanningLessonAttachments {
+            ProgressView().controlSize(.small)
+            Text("첨부파일 확인 중").foregroundStyle(.secondary)
+        } else if let lessonAttachmentScanError {
+            Text("첨부 확인 실패: \(lessonAttachmentScanError)").foregroundStyle(.red).lineLimit(1)
+        } else if !(store.database.attachmentRootPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text("첨부파일 \(lessonAttachmentCount)개 · \(lessonAttachmentStudentCount)명")
+                .foregroundStyle(lessonAttachmentCount == 0 ? Color.secondary : Color.blue)
+                .help("루트 포함 최대 깊이 \(AttachmentScanner.maximumDepth)까지 일반 파일 \(lessonAttachmentScannedFileCount)개를 확인했습니다.")
         }
-        .onChange(of: group?.version) { oldVersion, newVersion in
-            guard oldVersion != newVersion else { return }
-            rebuildPerformanceRows()
+    }
+
+    private var selectedLessonMessage: some View {
+        GroupBox("선택 학생 전체 메시지") {
+            if let id = selectedPreviewStudentID, let row = previewRows.first(where: { $0.studentID == id }) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(row.error ?? row.message).textSelection(.enabled)
+                        let paths = lessonAttachmentPaths[id] ?? []
+                        if let notice = AttachmentDeliveryNotice.preview(studentName: row.studentName, paths: paths) {
+                            Divider()
+                            Text(notice).font(.headline).foregroundStyle(.blue)
+                            ForEach(paths, id: \.self) { path in
+                                Text("• \(URL(fileURLWithPath: path).lastPathComponent)").textSelection(.enabled)
+                            }
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                }
+            } else {
+                Text("학생 행을 클릭하면 잘리지 않은 전체 메시지가 표시됩니다.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+        }.frame(height: 190)
+    }
+
+    private func handleLessonClassChange(_ newClassID: UUID) {
+        let defaultID = store.database.classes.first { $0.id == newClassID }?.defaultPresetID
+        if let defaultID, store.database.presets.contains(where: { $0.id == defaultID }) {
+            draft.presetID = defaultID
+        } else if let directID = store.database.presets.first(where: { $0.kind == .direct })?.id {
+            draft.presetID = directID
         }
-        .alert("공지 문구에 학생 호칭이 없습니다", isPresented: $showingMissingNicknameWarning) {
-            Button("돌아가서 직접 확인", role: .cancel) { }
-            Button("무시하고 직접 보내기", role: .destructive) { sendLessonNow() }
-        } message: {
-            Text("아래 학생은 자신의 호칭이 공지 문구에 포함되어 있지 않습니다. Google Sheet의 행과 문구가 맞는지 확인하세요.\n\n\(missingNicknameWarningText)")
-        }
+        rebuildPerformanceRows()
     }
 
     private var performanceGrid: some View {
@@ -1248,6 +1339,41 @@ struct LessonManagementView: View {
         }
     }
 
+    private func scanLessonAttachmentsForPreview() async {
+        let root = (store.database.attachmentRootPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !root.isEmpty else {
+            lessonAttachmentPaths = [:]
+            lessonAttachmentScannedFileCount = 0
+            lessonAttachmentScanError = nil
+            isScanningLessonAttachments = false
+            return
+        }
+        let students = previewRows.compactMap { store.student(id: $0.studentID) }
+        guard !students.isEmpty else {
+            lessonAttachmentPaths = [:]
+            lessonAttachmentScannedFileCount = 0
+            lessonAttachmentScanError = nil
+            isScanningLessonAttachments = false
+            return
+        }
+        isScanningLessonAttachments = true
+        lessonAttachmentScanError = nil
+        do {
+            let result = try await Task.detached {
+                try AttachmentScanner.scan(rootPath: root, students: students)
+            }.value
+            guard !Task.isCancelled else { return }
+            lessonAttachmentPaths = result.filesByStudentID.mapValues { $0.map(\.path) }
+            lessonAttachmentScannedFileCount = result.scannedFileCount
+        } catch {
+            guard !Task.isCancelled else { return }
+            lessonAttachmentPaths = [:]
+            lessonAttachmentScannedFileCount = 0
+            lessonAttachmentScanError = error.localizedDescription
+        }
+        if !Task.isCancelled { isScanningLessonAttachments = false }
+    }
+
     private func makeLessonBatch(allowEmptyMessages: Bool) -> (SendBatch, [ValidationIssue])? {
         guard let group, let preset else { return nil }
         var issues: [ValidationIssue] = []
@@ -1312,7 +1438,7 @@ struct LessonManagementView: View {
             var batch = initialBatch
             do {
                 let root = (store.database.attachmentRootPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !operationDryRun && !root.isEmpty {
+                if !root.isEmpty {
                     let students = batch.items.compactMap { store.student(id: $0.studentID) }
                     let result = try await Task.detached {
                         try AttachmentScanner.scan(rootPath: root, students: students)
@@ -1320,6 +1446,11 @@ struct LessonManagementView: View {
                     for index in batch.items.indices {
                         batch.items[index].attachmentPaths = result.filesByStudentID[batch.items[index].studentID]?.map(\.path) ?? []
                     }
+                    lessonAttachmentPaths = result.filesByStudentID.mapValues { $0.map(\.path) }
+                    lessonAttachmentScannedFileCount = result.scannedFileCount
+                    lessonAttachmentScanError = nil
+                } else {
+                    for index in batch.items.indices { batch.items[index].attachmentPaths = [] }
                 }
                 guard operationSelectionRevision == lessonSelectionRevision else {
                     store.currentBatch = nil
@@ -1337,6 +1468,11 @@ struct LessonManagementView: View {
                     return
                 }
                 isPreparingSend = false
+                if !operationDryRun, AttachmentDeliveryNotice.confirmation(in: batch.items) != nil {
+                    pendingLessonBatch = batch
+                    showingLessonAttachmentConfirmation = true
+                    return
+                }
                 await kakao.send(batch: batch, dryRun: operationDryRun, store: store)
             } catch {
                 isPreparingSend = false
@@ -1536,6 +1672,7 @@ struct SendingView: View {
     @State private var commonClassID: UUID?
     @State private var commonMessages: [String] = [""]
     @State private var isScanningAttachments = false
+    @State private var isPreparingRealSend = false
     @State private var showingMissingNicknameWarning = false
     @State private var missingNicknameIssues: [DirectNoticeNicknameIssue] = []
 
@@ -1589,10 +1726,10 @@ struct SendingView: View {
                             set: { store.setAttachmentRootPath($0) }
                         )).textFieldStyle(.roundedBorder)
                         Button("폴더 선택…") { chooseAttachmentFolder() }
-                        Button(isScanningAttachments ? "스캔 중…" : "하위 폴더 전체 스캔") { scanAttachments() }
+                        Button(isScanningAttachments ? "스캔 중…" : "최대 3단계 파일 스캔") { scanAttachments() }
                             .disabled(store.currentBatch == nil || isScanningAttachments)
                     }
-                    Text("파일명에 학교, 학번(예: 25 또는 2025), 정확한 성명이 모두 포함된 모든 파일을 학생별로 연결합니다.")
+                    Text("선택 폴더를 깊이 0으로 보고 최대 깊이 3까지 확인합니다. 파일명에 학교, 학번(예: 25 또는 2025), 정확한 성명이 모두 포함된 모든 일반 파일을 학생별로 연결합니다.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(6)
             }
@@ -1635,7 +1772,10 @@ struct SendingView: View {
                     }.width(min: 360)
                     TableColumn("첨부") { item in
                         let names = (item.attachmentPaths ?? []).map { URL(fileURLWithPath: $0).lastPathComponent }
-                        Text(names.isEmpty ? "없음" : "\(names.count)개\n" + names.joined(separator: "\n")).lineLimit(4).help(names.joined(separator: "\n"))
+                        let notice = AttachmentDeliveryNotice.preview(studentName: item.studentName, paths: item.attachmentPaths ?? [])
+                        Text(names.isEmpty ? "없음" : "\(notice ?? "")\n" + names.joined(separator: "\n"))
+                            .lineLimit(4)
+                            .help(names.joined(separator: "\n"))
                     }.width(min: 180)
                     TableColumn("오류") { Text($0.error ?? "").foregroundStyle(.red) }.width(min: 150)
                 }
@@ -1643,22 +1783,25 @@ struct SendingView: View {
                     Text(kakao.statusText).foregroundStyle(.secondary)
                     Spacer()
                     if kakao.isBusy { Button("즉시 중지", role: .destructive) { kakao.stop() } }
-                    Button(dryRun ? "드라이런 시작" : "실제 발송 시작") { if dryRun { start(batch) } else { requestRealSend(batch) } }
-                        .buttonStyle(.borderedProminent).tint(dryRun ? .blue : .red).disabled(hasErrors || !reviewed || kakao.isBusy || batch.items.isEmpty)
+                    Button(dryRun ? "드라이런 시작" : (isPreparingRealSend ? "첨부 확인 중…" : "실제 발송 시작")) {
+                        if dryRun { start(batch) } else { requestRealSend(batch) }
+                    }
+                        .buttonStyle(.borderedProminent).tint(dryRun ? .blue : .red)
+                        .disabled(hasErrors || !reviewed || kakao.isBusy || batch.items.isEmpty || isPreparingRealSend)
                 }
             } else { ContentUnavailableView("반을 선택하고 Google Sheet의 오늘 수업값을 붙여넣으세요", systemImage: "doc.on.clipboard") }
         }.padding(20)
         .onChange(of: classID) { _, _ in prepareEmptyGrid() }
         .onChange(of: preparedRows.map(\.isIncluded)) { _, _ in invalidatePreparedBatchForSelectionChange() }
         .onChange(of: store.currentBatch?.id) { _, _ in reviewed = false }
-        .alert("실제 카카오톡 메시지를 발송할까요?", isPresented: $confirmRealSend) {
-            Button("취소", role: .cancel) { }
-            Button("정확히 검토했으며 발송", role: .destructive) { if let batch = store.currentBatch { start(batch) } }
-        } message: { Text("각 방 제목을 접근성 API로 재검증하지만 KakaoTalk UI 변경 시 즉시 중지될 수 있습니다.") }
+        .alert(realSendConfirmationTitle, isPresented: $confirmRealSend) {
+            Button("뒤로가기", role: .cancel) { }
+            Button("보내기", role: .destructive) { if let batch = store.currentBatch { start(batch) } }
+        } message: { Text(realSendConfirmationMessage) }
         .alert("공지 문구에 학생 호칭이 없습니다", isPresented: $showingMissingNicknameWarning) {
             Button("돌아가서 직접 확인", role: .cancel) { }
-            Button("무시하고 직접 보내기", role: .destructive) {
-                if let batch = store.currentBatch { start(batch) }
+            Button("무시하고 계속", role: .destructive) {
+                if let batch = store.currentBatch { prepareRealSendConfirmation(batch) }
             }
         } message: {
             Text("아래 학생은 자신의 호칭이 공지 문구에 포함되어 있지 않습니다. Google Sheet의 행과 문구가 맞는지 확인하세요.\n\n\(missingNicknameWarningText)")
@@ -1666,9 +1809,23 @@ struct SendingView: View {
     }
     private func start(_ batch: SendBatch) { Task { await kakao.send(batch: batch, dryRun: dryRun, store: store) } }
 
+    private var realSendConfirmationTitle: String {
+        AttachmentDeliveryNotice.confirmation(in: store.currentBatch?.items ?? []) == nil
+            ? "실제 카카오톡 메시지를 발송할까요?"
+            : "첨부파일 발송 확인"
+    }
+
+    private var realSendConfirmationMessage: String {
+        let safety = "각 방 제목을 접근성 API로 재검증하며, 여러 파일은 압축하지 않고 한 건씩 개별 전송합니다."
+        guard let attachment = AttachmentDeliveryNotice.confirmation(in: store.currentBatch?.items ?? []) else {
+            return safety
+        }
+        return "\(attachment)\n\n\(safety)"
+    }
+
     private func requestRealSend(_ batch: SendBatch) {
         guard let presetKind = store.database.presets.first(where: { $0.id == batch.metadata.presetID })?.kind else {
-            confirmRealSend = true
+            prepareRealSendConfirmation(batch)
             return
         }
         missingNicknameIssues = DirectNoticeNicknameValidator.issuesIfWarningRequired(
@@ -1679,10 +1836,49 @@ struct SendingView: View {
             }
         )
         guard !missingNicknameIssues.isEmpty else {
-            confirmRealSend = true
+            prepareRealSendConfirmation(batch)
             return
         }
         showingMissingNicknameWarning = true
+    }
+
+    private func prepareRealSendConfirmation(_ initialBatch: SendBatch) {
+        guard !isPreparingRealSend else { return }
+        isPreparingRealSend = true
+        Task {
+            var batch = initialBatch
+            do {
+                let root = (store.database.attachmentRootPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if root.isEmpty {
+                    for index in batch.items.indices { batch.items[index].attachmentPaths = [] }
+                } else {
+                    let students = batch.items.compactMap { store.student(id: $0.studentID) }
+                    let result = try await Task.detached {
+                        try AttachmentScanner.scan(rootPath: root, students: students)
+                    }.value
+                    for index in batch.items.indices {
+                        batch.items[index].attachmentPaths = result.filesByStudentID[batch.items[index].studentID]?.map(\.path) ?? []
+                    }
+                }
+                guard store.currentBatch?.id == initialBatch.id else {
+                    isPreparingRealSend = false
+                    store.banner = "첨부 확인 중 발송 목록이 변경되었습니다. 다시 검토해 주세요."
+                    return
+                }
+                let issues = BatchParser.validate(batch: batch, database: store.database)
+                store.currentBatch = batch
+                store.validationIssues = issues
+                isPreparingRealSend = false
+                guard !issues.contains(where: { $0.severity == .error }) else {
+                    store.banner = "첨부파일을 포함한 최종 검증에서 오류가 발생해 발송하지 않았습니다."
+                    return
+                }
+                confirmRealSend = true
+            } catch {
+                isPreparingRealSend = false
+                store.banner = "첨부파일 스캔 실패: \(error.localizedDescription)"
+            }
+        }
     }
 
     private var missingNicknameWarningText: String {
