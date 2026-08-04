@@ -295,6 +295,19 @@ enum SelfTest {
                 && right == 700
                 && left + right == totalWidth
         }
+        check("반 관리·Preset 실제 분할 기본값 3대7", failures: &failures) {
+            ClassManagementSplitLayout.classListFraction == 0.3
+                && ClassManagementSplitLayout.studentManagementFraction == 0.7
+                && InitialRatioSplitViewController.initialDividerPosition(
+                    totalWidth: 1_000,
+                    leadingFraction: ClassManagementSplitLayout.classListFraction
+                ) == 300
+        }
+        check("첫 화면 앱 버전 표기", failures: &failures) {
+            AppVersion.formatted(shortVersion: "2.5.11", build: "45") == "v2.5.11 (빌드 45)"
+                && AppVersion.formatted(shortVersion: "2.5.11", build: nil) == "v2.5.11"
+                && AppVersion.formatted(shortVersion: nil, build: "45") == "버전 정보 없음"
+        }
         check("반 JSON 파일 다른 DB 왕복·학생 연결", failures: &failures) {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-class-archive-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

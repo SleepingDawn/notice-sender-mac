@@ -86,7 +86,13 @@ struct DashboardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("안전한 공지 발송 준비").font(.largeTitle.bold())
+                HStack(alignment: .firstTextBaseline) {
+                    Text("안전한 공지 발송 준비").font(.largeTitle.bold())
+                    Spacer()
+                    Text(AppVersion.display)
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
                 Text("학생 DB와 카카오톡 상태를 먼저 확인합니다. 실제 전송은 수업 및 발송 화면에서 전체 검토 후에만 시작됩니다.").foregroundStyle(.secondary)
                 HStack(spacing: 16) {
                     MetricCard(title: "학생", value: "\(store.database.students.count)명", color: .blue)
@@ -476,8 +482,11 @@ struct ClassesView: View {
     @State private var renameClassText = ""
 
     var body: some View {
-        GeometryReader { geometry in
-            HSplitView {
+        InitialRatioSplitView(
+            leadingFraction: ClassManagementSplitLayout.classListFraction,
+            minimumLeadingWidth: 280,
+            minimumTrailingWidth: 280
+        ) {
                 VStack(alignment: .leading) {
                 HStack {
                     Text("반").font(.title.bold())
@@ -516,12 +525,8 @@ struct ClassesView: View {
                 }
                 }
                 .padding()
-                .frame(
-                    minWidth: 280,
-                    idealWidth: ClassManagementSplitLayout.classListWidth(totalWidth: geometry.size.width),
-                    maxWidth: .infinity,
-                    maxHeight: .infinity
-                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } trailing: {
                 if let group = store.database.classes.first(where: { $0.id == selectedID }) {
                     let candidates = availableStudents(for: group)
                     VStack(alignment: .leading, spacing: 12) {
@@ -576,24 +581,13 @@ struct ClassesView: View {
                     }
                     }
                     .padding(20)
-                    .frame(
-                        minWidth: 280,
-                        idealWidth: ClassManagementSplitLayout.studentManagementWidth(totalWidth: geometry.size.width),
-                        maxWidth: .infinity,
-                        maxHeight: .infinity
-                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ContentUnavailableView("반을 선택하세요", systemImage: "rectangle.3.group")
-                        .frame(
-                            minWidth: 280,
-                            idealWidth: ClassManagementSplitLayout.studentManagementWidth(totalWidth: geometry.size.width),
-                            maxWidth: .infinity,
-                            maxHeight: .infinity
-                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: selectedID) { _, _ in selectedStudents.removeAll() }
         .sheet(isPresented: $creating) { ClassCreator { name, school, year, ids in store.createClass(name: name, school: school, year: year, studentIDs: ids); creating = false } }
         .alert("반 이름 편집", isPresented: $showingRenameClass) {
@@ -829,17 +823,21 @@ struct PresetsView: View {
     @State private var preview = ""
 
     var body: some View {
-        GeometryReader { geometry in
-            HSplitView {
+        InitialRatioSplitView(
+            leadingFraction: ClassManagementSplitLayout.classListFraction,
+            minimumLeadingWidth: 280,
+            minimumTrailingWidth: 420
+        ) {
                 List(store.database.presets.sorted { ($0.kind.rawValue, -$0.version) < ($1.kind.rawValue, -$1.version) }, selection: $selectedID) { preset in
                     VStack(alignment: .leading) { Text(preset.name); Text("\(preset.kind.rawValue) · v\(preset.version)").font(.caption).foregroundStyle(.secondary) }.tag(preset.id)
                 }
-                .frame(minWidth: 280, idealWidth: geometry.size.width / 2, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onChange(of: selectedID) { _, id in
                     guard let id, let selected = store.database.presets.first(where: { $0.id == id }) else { return }
                     draft = selected
                     updatePreview()
                 }
+        } trailing: {
                 if selectedID != nil {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
@@ -860,13 +858,11 @@ struct PresetsView: View {
                         }
                         .padding(20)
                     }
-                    .frame(minWidth: 420, idealWidth: geometry.size.width / 2, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ContentUnavailableView("Preset을 선택하세요", systemImage: "text.badge.star")
-                        .frame(minWidth: 420, idealWidth: geometry.size.width / 2, maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
