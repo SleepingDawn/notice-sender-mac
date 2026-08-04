@@ -105,6 +105,35 @@ enum SelfTest {
                 && BatchRunPolicy.statusAfterFailure(previousStatus: .sent, dryRun: true) == .sent
                 && BatchRunPolicy.statusAfterFailure(previousStatus: .verified, dryRun: true) == .failed
         }
+        check("발송 전 일시 오류만 1회 안전 복구", failures: &failures) {
+            let retryable = [
+                "[WINDOW_NOT_READY] Chat window did not open",
+                "[FOCUS_FAIL] Could not focus search field",
+                "[INPUT_NOT_REFLECTED] Search keyword was not entered",
+                "[SEARCH_MISS] Search field not found",
+                "[AMBIGUOUS_MATCH] Expected exactly one result, found 0",
+            ].allSatisfy { detail in
+                KmsgPreSendRecoveryPolicy.shouldRetryResolution(
+                    after: KakaoTalkError.actionFailed(detail),
+                    attempt: 1
+                )
+            }
+            let finalAttemptStops = !KmsgPreSendRecoveryPolicy.shouldRetryResolution(
+                after: KakaoTalkError.actionFailed("[WINDOW_NOT_READY] still unavailable"),
+                attempt: 2
+            )
+            let unsafeToRetry: [Error] = [
+                KakaoTalkError.actionFailed("[AMBIGUOUS_MATCH] found 2"),
+                KmsgEmbeddedError.enterNotEffective,
+                KmsgEmbeddedError.attachmentUploadTimedOut("report.pdf"),
+                KmsgEmbeddedError.cancelled,
+            ]
+            return retryable
+                && finalAttemptStops
+                && unsafeToRetry.allSatisfy {
+                    !KmsgPreSendRecoveryPolicy.shouldRetryResolution(after: $0, attempt: 1)
+                }
+        }
         check("모의고사 3개", failures: &failures) {
             var input = sampleInput(homework: nil, homeworkMax: nil, test: nil, testMax: nil)
             input.exams = (1...3).map { ExamInput(title: "모의고사 \($0)회", score: Double(80 + $0), maximum: 100, average: 75, highest: 95, rank: $0, attendees: 10, comment: "코멘트") }

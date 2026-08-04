@@ -92,6 +92,20 @@ public enum KmsgEmbeddedError: LocalizedError {
     }
 }
 
+public enum KmsgPreSendRecoveryPolicy {
+    public static let maximumResolutionAttempts = 2
+
+    public static func shouldRetryResolution(after error: Error, attempt: Int) -> Bool {
+        guard attempt < maximumResolutionAttempts else { return false }
+        let detail = error.localizedDescription
+        return detail.contains("[WINDOW_NOT_READY]")
+            || detail.contains("[FOCUS_FAIL]")
+            || detail.contains("[INPUT_NOT_REFLECTED]")
+            || detail.contains("[SEARCH_MISS]")
+            || (detail.contains("[AMBIGUOUS_MATCH]") && detail.contains("found 0"))
+    }
+}
+
 /// A narrow, fail-closed bridge around kmsg's AX resolver.
 ///
 /// NoticeSender deliberately exposes none of kmsg's fuzzy matching or forced
@@ -205,21 +219,62 @@ public enum KmsgEmbeddedEngine {
             cancellationToken: cancellationToken,
             targetProcessIdentifier: kakao.processIdentifier
         )
-        let resolver = ChatWindowResolver(
-            kakao: kakao,
-            runner: runner,
-            useCache: false,
-            deepRecoveryEnabled: false,
-            layoutMode: .preserve,
-            interactionMode: .allowUIAutomation,
-            exactMatchOnly: true,
-            requireUniqueMatch: true
-        )
-        let resolution: ChatWindowResolution
-        if let chatID, !chatID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            resolution = try resolver.resolve(chatID: chatID)
-        } else {
-            resolution = try resolver.resolve(query: roomName)
+        func makeResolver() -> ChatWindowResolver {
+            ChatWindowResolver(
+                kakao: kakao,
+                runner: runner,
+                useCache: false,
+                deepRecoveryEnabled: true,
+                layoutMode: .preserve,
+                interactionMode: .allowUIAutomation,
+                exactMatchOnly: true,
+                requireUniqueMatch: true
+            )
+        }
+
+        var resolver = makeResolver()
+        var resolution: ChatWindowResolution?
+        var resolutionAttempt = 0
+        while resolution == nil {
+            resolutionAttempt += 1
+            do {
+                if let chatID, !chatID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    resolution = try resolver.resolve(chatID: chatID)
+                } else {
+                    resolution = try resolver.resolve(query: roomName)
+                }
+            } catch {
+                try throwIfCancelled(cancellationToken)
+                guard KmsgPreSendRecoveryPolicy.shouldRetryResolution(
+                    after: error,
+                    attempt: resolutionAttempt
+                ) else {
+                    throw error
+                }
+
+                // Nothing has been placed in the composer yet, so one retry is
+                // safe and cannot duplicate a message. Reset any half-open
+                // search, restore the chat-list surface, then resolve afresh.
+                runner.log("pre-send resolution: transient failure; recovering before retry")
+                runner.pressEscape()
+                Thread.sleep(forTimeInterval: 0.25)
+                guard let recoveredWindow = kakao.ensureMainWindow(
+                    timeout: 3.0,
+                    mode: .recovery,
+                    trace: { message in runner.log(message) }
+                ) else {
+                    throw error
+                }
+                _ = kakao.openChatListTab(
+                    fallbackWindow: recoveredWindow,
+                    settleDelay: 0.35,
+                    trace: { message in runner.log(message) }
+                )
+                resolver = makeResolver()
+            }
+        }
+        guard let resolution else {
+            throw KakaoTalkError.windowNotFound("[WINDOW_NOT_READY] Chat window for '\(roomName)' did not open")
         }
         var mayCloseTransientWindow = attachmentURLs.isEmpty
         defer {
@@ -231,7 +286,7 @@ public enum KmsgEmbeddedEngine {
             // leave the window open. Closing an uploading window can cancel the
             // transfer or cause KakaoTalk to present a separate warning.
             if resolution.openedTransiently, mayCloseTransientWindow {
-                _ = resolver.closeWindow(resolution.window)
+                _ = resolver.closeWindowAndPrepareNext(resolution.window)
             }
         }
         try throwIfCancelled(cancellationToken)
@@ -276,7 +331,11 @@ public enum KmsgEmbeddedEngine {
                 on: composer,
                 label: "notice sender message",
                 attempts: 1,
-                reflectionTimeout: 0.4,
+                // Enter is deliberately never retried: the first event may
+                // already have sent the message. KakaoTalk can take longer than
+                // 0.4s to clear the AX composer while changing windows/classes,
+                // so wait for the original event to become observable instead.
+                reflectionTimeout: 2.0,
                 retryDelay: 0.08
             ) else {
                 try throwIfCancelled(cancellationToken)

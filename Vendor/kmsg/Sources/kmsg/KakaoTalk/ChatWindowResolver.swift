@@ -203,6 +203,52 @@ struct ChatWindowResolver {
         return waitForWindowClosed(window, label: "close via cmd+w")
     }
 
+    /// Closes the transient room and does not return until KakaoTalk exposes a
+    /// stable list/main window for the next recipient. This keeps a completed
+    /// batch from leaking its final room/closing animation into a subsequent
+    /// batch, including when the next batch belongs to another class.
+    @discardableResult
+    func closeWindowAndPrepareNext(_ window: UIElement) -> Bool {
+        let closed = closeWindow(window)
+        guard closed else {
+            runner.log("next operation: transient chat window did not close cleanly")
+            return false
+        }
+
+        var nextWindow: UIElement?
+        let listReady = runner.waitUntil(
+            label: "next operation chat list ready",
+            timeout: 1.5,
+            pollInterval: 0.08,
+            evaluateAfterTimeout: false
+        ) {
+            nextWindow = kakao.chatListWindow ?? kakao.mainWindow
+            return nextWindow != nil
+        }
+        if listReady, let nextWindow {
+            // Explicitly press the chats navigation item. Merely seeing the
+            // main window is insufficient because the prior class may have
+            // left it on friends/search state while its chat window closed.
+            return kakao.openChatListTab(
+                fallbackWindow: nextWindow,
+                settleDelay: 0.35,
+                trace: { message in runner.log(message) }
+            ) != nil
+        }
+
+        runner.log("next operation: list window unavailable; reopening KakaoTalk main window")
+        guard let recovered = kakao.ensureWindowReopened(timeout: 3.0, trace: { message in
+            runner.log(message)
+        }) else {
+            return false
+        }
+        return kakao.openChatListTab(
+            fallbackWindow: recovered,
+            settleDelay: 0.35,
+            trace: { message in runner.log(message) }
+        ) != nil
+    }
+
     private func resolveExistingWindowOnly(query: String) throws -> ChatWindowResolution {
         if let existingWindow = findMatchingChatWindow(in: kakao.windows, query: query) {
             runner.log("background-safe: matched already exposed chat window")
@@ -678,7 +724,7 @@ struct ChatWindowResolver {
 
     private func waitForOpenedChatWindow(query: String, fallbackWindow: UIElement) -> UIElement? {
         var resolved: UIElement?
-        _ = runner.waitUntil(label: "chat context ready", timeout: 1.5, pollInterval: 0.05, evaluateAfterTimeout: false) {
+        _ = runner.waitUntil(label: "chat context ready", timeout: 3.0, pollInterval: 0.05, evaluateAfterTimeout: false) {
             resolved = resolveOpenedChatWindowFast(query: query)
             return resolved != nil
         }
