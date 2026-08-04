@@ -362,8 +362,8 @@ enum SelfTest {
                 ) == 300
         }
         check("첫 화면 앱 버전 표기", failures: &failures) {
-            AppVersion.formatted(shortVersion: "3.0.0", build: "47") == "v3.0.0 (빌드 47)"
-                && AppVersion.formatted(shortVersion: "3.0.0", build: nil) == "v3.0.0"
+            AppVersion.formatted(shortVersion: "3.0.2", build: "48") == "v3.0.2 (빌드 48)"
+                && AppVersion.formatted(shortVersion: "3.0.2", build: nil) == "v3.0.2"
                 && AppVersion.formatted(shortVersion: nil, build: "45") == "버전 정보 없음"
         }
         check("반 JSON 파일 다른 DB 왕복·학생 연결", failures: &failures) {
