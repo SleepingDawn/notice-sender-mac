@@ -4,12 +4,14 @@ enum TemplateValidationError: LocalizedError {
     case invalidThresholds
     case emptyTemplate(String)
     case unknownToken(String)
+    case malformedPlaceholder(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidThresholds: "별점 기준은 0~1 사이이며 중간 기준이 높은 기준보다 작아야 합니다."
         case .emptyTemplate(let name): "\(name) 문구가 비어 있습니다."
         case .unknownToken(let token): "지원하지 않는 변수입니다: {{\(token)}}"
+        case .malformedPlaceholder(let name): "\(name) 문구에 닫히지 않았거나 잘못된 변수 표시가 있습니다."
         }
     }
 }
@@ -29,6 +31,9 @@ enum TemplateEngine {
         }
         for (name, template) in [("출석", preset.presentTemplate), ("동영상", preset.videoTemplate), ("결석", preset.absentTemplate)] {
             guard !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw TemplateValidationError.emptyTemplate(name) }
+            guard hasWellFormedPlaceholders(in: template) else {
+                throw TemplateValidationError.malformedPlaceholder(name)
+            }
             for token in tokens(in: template) where !supportedTokens.contains(token) {
                 throw TemplateValidationError.unknownToken(token)
             }
@@ -85,12 +90,24 @@ enum TemplateEngine {
     }
 
     private static func tokens(in template: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: #"\{\{([a-z_]+)\}\}"#) else { return [] }
+        guard let regex = try? NSRegularExpression(pattern: #"\{\{([^{}]+)\}\}"#) else { return [] }
         let range = NSRange(template.startIndex..., in: template)
         return regex.matches(in: template, range: range).compactMap {
             guard let tokenRange = Range($0.range(at: 1), in: template) else { return nil }
             return String(template[tokenRange])
         }
+    }
+
+    private static func hasWellFormedPlaceholders(in template: String) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: #"\{\{([^{}]+)\}\}"#) else { return false }
+        let range = NSRange(template.startIndex..., in: template)
+        let textWithoutPlaceholders = regex.stringByReplacingMatches(
+            in: template,
+            range: range,
+            withTemplate: ""
+        )
+        return !textWithoutPlaceholders.contains("{{")
+            && !textWithoutPlaceholders.contains("}}")
     }
 
     private static func stars(score: Double?, maximum: Double?, preset: MessagePreset, missing: String) -> String {

@@ -850,6 +850,11 @@ struct PresetsView: View {
                                     set: { draft.mockExamCount = max(1, min(3, $0)) }
                                 ), in: 1...3)
                             }
+                            PresetAppleIntelligenceEditorView(
+                                draft: $draft,
+                                onDraftChanged: updatePreview
+                            )
+                            .id(draft.id)
                             TemplateEditor(title: "출석 문구", text: $draft.presentTemplate)
                             TemplateEditor(title: "동영상 문구", text: $draft.videoTemplate)
                             TemplateEditor(title: "결석 문구", text: $draft.absentTemplate)
@@ -876,7 +881,24 @@ struct PresetsView: View {
 struct TemplateEditor: View {
     let title: String
     @Binding var text: String
-    var body: some View { GroupBox(title) { TextEditor(text: $text).font(.system(.body, design: .monospaced)).frame(minHeight: 180).padding(4) } }
+    var body: some View {
+        GroupBox(title) {
+            writingToolsEditor
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 180)
+                .padding(4)
+        }
+    }
+
+    @ViewBuilder
+    private var writingToolsEditor: some View {
+        if #available(macOS 15.0, *) {
+            TextEditor(text: $text)
+                .writingToolsBehavior(.complete)
+        } else {
+            TextEditor(text: $text)
+        }
+    }
 }
 
 private struct LessonPreviewRow: Identifiable {

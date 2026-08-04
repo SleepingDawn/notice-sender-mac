@@ -464,6 +464,63 @@ enum SelfTest {
             let message = try TemplateEngine.render(preset: editableDraft, input: sampleInput(homework: 8, homeworkMax: 10, test: 8, testMax: 10))
             return editableDraft.id == selected.id && editableDraft.name == "일반 수업 수정본" && message.contains("공지")
         }
+        check("Preset 변수 사용자 설명과 엔진 지원 목록 일치", failures: &failures) {
+            Set(TemplateVariableCatalog.all.map(\.token)) == TemplateEngine.supportedTokens
+                && TemplateVariableCatalog.all.allSatisfy {
+                    !$0.label.isEmpty && !$0.detail.isEmpty
+                }
+        }
+        check("Apple Intelligence Preset 초안 검증 후 적용", failures: &failures) {
+            let source = DefaultPresets.regular
+            let revision = PresetAIRevision(
+                presentTemplate: "{{nickname}} 출석 안내\n{{progress}}\n{{notice}}",
+                videoTemplate: "{{nickname}} 동영상 안내\n{{assignment}}\n{{notice}}",
+                absentTemplate: "{{nickname}} 결석 안내\n{{exam_unit}}\n{{notice}}",
+                summary: "문구를 간결하게 변경"
+            )
+            guard let applied = try? AppleIntelligencePresetEditor.applying(revision, to: source) else {
+                return false
+            }
+            let invalid = PresetAIRevision(
+                presentTemplate: "{{unknown_ai_token}}",
+                videoTemplate: revision.videoTemplate,
+                absentTemplate: revision.absentTemplate,
+                summary: "잘못된 변수"
+            )
+            let invalidRejected: Bool
+            do {
+                _ = try AppleIntelligencePresetEditor.applying(invalid, to: source)
+                invalidRejected = false
+            } catch {
+                invalidRejected = true
+            }
+            var malformed = revision
+            malformed.presentTemplate = "{{nickname 출석 안내"
+            let malformedRejected: Bool
+            do {
+                _ = try AppleIntelligencePresetEditor.applying(malformed, to: source)
+                malformedRejected = false
+            } catch {
+                malformedRejected = true
+            }
+            return applied.id == source.id
+                && applied.version == source.version
+                && applied.presentTemplate == revision.presentTemplate
+                && invalidRejected
+                && malformedRejected
+        }
+        check("Apple Intelligence 프롬프트에 현재 문구·내부 변수 사전 포함", failures: &failures) {
+            let preset = DefaultPresets.direct
+            let prompt = AppleIntelligencePresetEditor.prompt(
+                preset: preset,
+                instruction: "학생 호칭과 날짜를 넣어줘"
+            )
+            return prompt.contains("학생 호칭과 날짜를 넣어줘")
+                && prompt.contains(preset.presentTemplate)
+                && TemplateVariableCatalog.all.allSatisfy {
+                    prompt.contains("{{\($0.token)}}")
+                }
+        }
         check("첨부파일 하위 폴더·정확한 성명 매칭", failures: &failures) {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-attachment-\(UUID().uuidString)", isDirectory: true)
             let child = root.appendingPathComponent("하위", isDirectory: true)
