@@ -258,6 +258,14 @@ enum SelfTest {
                 && emptyRejected
                 && store.group(id: group.id)?.name == "변경 후"
         }
+        check("반 관리 기본 분할 비율 3대7", failures: &failures) {
+            let totalWidth = CGFloat(1_000)
+            let left = ClassManagementSplitLayout.classListWidth(totalWidth: totalWidth)
+            let right = ClassManagementSplitLayout.studentManagementWidth(totalWidth: totalWidth)
+            return left == 300
+                && right == 700
+                && left + right == totalWidth
+        }
         check("반 JSON 파일 다른 DB 왕복·학생 연결", failures: &failures) {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-class-archive-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

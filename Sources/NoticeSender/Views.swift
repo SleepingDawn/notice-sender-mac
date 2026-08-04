@@ -452,6 +452,19 @@ struct StudentEditor: View {
     }
 }
 
+enum ClassManagementSplitLayout {
+    static let classListFraction = 0.3
+    static let studentManagementFraction = 0.7
+
+    static func classListWidth(totalWidth: CGFloat) -> CGFloat {
+        totalWidth * classListFraction
+    }
+
+    static func studentManagementWidth(totalWidth: CGFloat) -> CGFloat {
+        totalWidth * studentManagementFraction
+    }
+}
+
 struct ClassesView: View {
     @EnvironmentObject private var store: AppStore
     @State private var selectedID: UUID?
@@ -503,7 +516,12 @@ struct ClassesView: View {
                 }
                 }
                 .padding()
-                .frame(minWidth: 280, idealWidth: geometry.size.width / 2, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    minWidth: 280,
+                    idealWidth: ClassManagementSplitLayout.classListWidth(totalWidth: geometry.size.width),
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
                 if let group = store.database.classes.first(where: { $0.id == selectedID }) {
                     let candidates = availableStudents(for: group)
                     VStack(alignment: .leading, spacing: 12) {
@@ -558,10 +576,20 @@ struct ClassesView: View {
                     }
                     }
                     .padding(20)
-                    .frame(minWidth: 280, idealWidth: geometry.size.width / 2, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(
+                        minWidth: 280,
+                        idealWidth: ClassManagementSplitLayout.studentManagementWidth(totalWidth: geometry.size.width),
+                        maxWidth: .infinity,
+                        maxHeight: .infinity
+                    )
                 } else {
                     ContentUnavailableView("반을 선택하세요", systemImage: "rectangle.3.group")
-                        .frame(minWidth: 280, idealWidth: geometry.size.width / 2, maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(
+                            minWidth: 280,
+                            idealWidth: ClassManagementSplitLayout.studentManagementWidth(totalWidth: geometry.size.width),
+                            maxWidth: .infinity,
+                            maxHeight: .infinity
+                        )
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
