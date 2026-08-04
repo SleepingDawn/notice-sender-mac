@@ -93,7 +93,7 @@ enum TemplateEngine {
         return rendered.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + closing
     }
 
-    private static func tokens(in template: String) -> [String] {
+    static func tokens(in template: String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: #"\{\{([^{}]+)\}\}"#) else { return [] }
         let range = NSRange(template.startIndex..., in: template)
         return regex.matches(in: template, range: range).compactMap {

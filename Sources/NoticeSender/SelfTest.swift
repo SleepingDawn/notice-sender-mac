@@ -511,16 +511,23 @@ enum SelfTest {
                 && input.testComment == "사용자 테스트 코멘트"
         }
         check("Preset 변수 사용자 설명과 엔진 지원 목록 일치", failures: &failures) {
-            Set(TemplateVariableCatalog.all.map(\.token)) == TemplateEngine.supportedTokens
+            let sample = DefaultPresets.regular.presentTemplate
+            let roundTrip = try? TemplateVariableCatalog.decodedFromAI(
+                TemplateVariableCatalog.encodedForAI(sample)
+            )
+            return Set(TemplateVariableCatalog.all.map(\.token)) == TemplateEngine.supportedTokens
                 && TemplateVariableCatalog.all.allSatisfy {
                     !$0.label.isEmpty && !$0.detail.isEmpty
                 }
+                && Set(TemplateVariableCatalog.all.map { TemplateVariableCatalog.marker(for: $0.token) }).count
+                    == TemplateVariableCatalog.all.count
+                && roundTrip == sample
         }
         check("Apple Intelligence Preset 초안 검증 후 적용", failures: &failures) {
             let source = DefaultPresets.regular
             let revision = PresetAIRevision(
-                presentTemplate: "{{nickname}} 출석 안내\n{{progress}}\n{{notice}}",
-                videoTemplate: "{{nickname}} 동영상 안내\n{{assignment}}\n{{notice}}",
+                presentTemplate: "따뜻하게 안내드립니다.\n" + source.presentTemplate,
+                videoTemplate: "따뜻하게 안내드립니다.\n" + source.videoTemplate,
                 summary: "문구를 간결하게 변경"
             )
             guard let applied = try? AppleIntelligencePresetEditor.applying(revision, to: source) else {
@@ -547,12 +554,25 @@ enum SelfTest {
             } catch {
                 malformedRejected = true
             }
+            var removedVariable = revision
+            removedVariable.presentTemplate = removedVariable.presentTemplate.replacingOccurrences(
+                of: "{{academy}}",
+                with: "학원"
+            )
+            let removedVariableRejected: Bool
+            do {
+                _ = try AppleIntelligencePresetEditor.applying(removedVariable, to: source)
+                removedVariableRejected = false
+            } catch {
+                removedVariableRejected = true
+            }
             return applied.id == source.id
                 && applied.version == source.version
                 && applied.presentTemplate == revision.presentTemplate
                 && applied.absentTemplate == source.absentTemplate
                 && invalidRejected
                 && malformedRejected
+                && removedVariableRejected
         }
         check("Apple Intelligence 프롬프트에 현재 문구·내부 변수 사전 포함", failures: &failures) {
             let preset = DefaultPresets.direct
@@ -561,10 +581,11 @@ enum SelfTest {
                 instruction: "학생 호칭과 날짜를 넣어줘"
             )
             return prompt.contains("학생 호칭과 날짜를 넣어줘")
-                && prompt.contains(preset.presentTemplate)
+                && prompt.contains(TemplateVariableCatalog.encodedForAI(preset.presentTemplate))
+                && !prompt.contains("{{notice}}")
                 && !prompt.contains("현재 결석 문구")
                 && TemplateVariableCatalog.all.allSatisfy {
-                    prompt.contains("{{\($0.token)}}")
+                    prompt.contains(TemplateVariableCatalog.marker(for: $0.token))
                 }
         }
         check("첨부파일 하위 폴더·정확한 성명 매칭", failures: &failures) {

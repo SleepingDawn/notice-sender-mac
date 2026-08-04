@@ -84,7 +84,9 @@ final class AppStore: ObservableObject {
             return URL(fileURLWithPath: override).appendingPathComponent("database.json")
         }
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return root.appendingPathComponent("NoticeSender", isDirectory: true).appendingPathComponent("database.json")
+        let directoryName = Bundle.main.object(forInfoDictionaryKey: "NoticeSenderDataDirectoryName") as? String
+            ?? "NoticeSender"
+        return root.appendingPathComponent(directoryName, isDirectory: true).appendingPathComponent("database.json")
     }
 
     func save() {

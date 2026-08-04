@@ -121,7 +121,7 @@ struct PresetAppleIntelligenceEditorView: View {
             revision = generated
             status = "지원 변수와 빈 문구 검증을 통과한 초안입니다."
         } catch {
-            status = error.localizedDescription
+            status = PresetAIDiagnostic.userMessage(error)
             statusIsError = true
         }
     }

@@ -41,7 +41,45 @@ enum TemplateVariableCatalog {
             .joined(separator: "\n")
     }
 
+    static var aiPromptGuide: String {
+        all.map { "\(marker(for: $0.token)) = \($0.label)" }
+            .joined(separator: "\n")
+    }
+
     static var friendlyLabels: String {
         all.map(\.label).joined(separator: " · ")
+    }
+
+    static func label(for token: String) -> String {
+        all.first(where: { $0.token == token })?.label ?? token
+    }
+
+    static func marker(for token: String) -> String {
+        guard let index = all.firstIndex(where: { $0.token == token }) else {
+            return "[[FIELD_UNKNOWN]]"
+        }
+        return String(format: "[[FIELD_%02d]]", index + 1)
+    }
+
+    static func encodedForAI(_ template: String) -> String {
+        all.reduce(template) { encoded, descriptor in
+            encoded.replacingOccurrences(
+                of: "{{\(descriptor.token)}}",
+                with: marker(for: descriptor.token)
+            )
+        }
+    }
+
+    static func decodedFromAI(_ template: String) throws -> String {
+        let decoded = all.reduce(template) { decoded, descriptor in
+            decoded.replacingOccurrences(
+                of: marker(for: descriptor.token),
+                with: "{{\(descriptor.token)}}"
+            )
+        }
+        guard !decoded.contains("[[FIELD_") else {
+            throw PresetAIEditorError.invalidFieldCode
+        }
+        return decoded
     }
 }
