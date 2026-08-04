@@ -10,6 +10,7 @@ SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-$ROOT/.build/dev-m
 APP="$ROOT/dist/TEST_공지.app"
 EXECUTABLE="TEST_NoticeSender"
 BUNDLE_ID="kr.onesolution.NoticeSender.dev"
+DEV_VERSION="$(/usr/bin/tr -d '[:space:]' < "$ROOT/Resources/DevVersion.txt")"
 /bin/rm -rf "$APP"
 /bin/mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/ThirdPartyLicenses"
 /bin/cp "$ROOT/.build/debug/NoticeSender" "$APP/Contents/MacOS/$EXECUTABLE"
@@ -22,6 +23,7 @@ PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName TEST_공지" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName TEST_공지" "$PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $DEV_VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :NoticeSenderDataDirectoryName string NoticeSenderDev" "$PLIST"
 
 # Keep development builds independent from the production app's TCC identity.

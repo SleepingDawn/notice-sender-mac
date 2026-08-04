@@ -40,6 +40,15 @@ enum TemplateEngine {
                 throw TemplateValidationError.unknownToken(token)
             }
         }
+        let footer = preset.effectiveFooterTemplate
+        if !footer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard hasWellFormedPlaceholders(in: footer) else {
+                throw TemplateValidationError.malformedPlaceholder("공지문 말미")
+            }
+            for token in tokens(in: footer) where !supportedTokens.contains(token) {
+                throw TemplateValidationError.unknownToken(token)
+            }
+        }
     }
 
     static func render(preset: MessagePreset, input: LessonInput) throws -> String {
@@ -87,10 +96,15 @@ enum TemplateEngine {
             "exam_sections": examSections(Array(input.exams.prefix(max(1, min(3, preset.mockExamCount ?? 3)))), includeStudent: true),
             "exam_summary_sections": examSections(Array(input.exams.prefix(max(1, min(3, preset.mockExamCount ?? 3)))), includeStudent: false)
         ]
-        var rendered = template
-        for (key, value) in values { rendered = rendered.replacingOccurrences(of: "{{\(key)}}", with: value) }
-        let closing = "문의사항 있으시면 해당 카톡으로 언제든 연락주세요. 감사합니다."
-        return rendered.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + closing
+        func renderTokens(in source: String) -> String {
+            values.reduce(source) { rendered, entry in
+                rendered.replacingOccurrences(of: "{{\(entry.key)}}", with: entry.value)
+            }
+        }
+        let body = renderTokens(in: template).trimmingCharacters(in: .whitespacesAndNewlines)
+        let footer = renderTokens(in: preset.effectiveFooterTemplate)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return [body, footer].filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
     static func tokens(in template: String) -> [String] {

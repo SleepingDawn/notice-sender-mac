@@ -822,6 +822,18 @@ struct PresetsView: View {
     @State private var draft: MessagePreset = DefaultPresets.first
     @State private var preview = ""
     @State private var previewDraft = PresetPreviewDraft()
+    @State private var showingCreatePreset = false
+    @State private var newPresetName = ""
+    @State private var newPresetKind: PresetKind = .regular
+    @State private var showingRenamePreset = false
+    @State private var renamePresetText = ""
+    @State private var showingDeletePreset = false
+
+    private var sortedPresets: [MessagePreset] {
+        store.database.presets.sorted {
+            ($0.kind.rawValue, $0.name, -$0.version) < ($1.kind.rawValue, $1.name, -$1.version)
+        }
+    }
 
     var body: some View {
         InitialRatioSplitView(
@@ -829,21 +841,60 @@ struct PresetsView: View {
             minimumLeadingWidth: 280,
             minimumTrailingWidth: 420
         ) {
-                List(store.database.presets.sorted { ($0.kind.rawValue, -$0.version) < ($1.kind.rawValue, -$1.version) }, selection: $selectedID) { preset in
-                    VStack(alignment: .leading) { Text(preset.name); Text("\(preset.kind.rawValue) · v\(preset.version)").font(.caption).foregroundStyle(.secondary) }.tag(preset.id)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Preset").font(.title.bold())
+                        Spacer()
+                        Menu {
+                            Button("선택 Preset JSON 내보내기") { exportSelectedPreset() }
+                                .disabled(selectedID == nil)
+                            Button("Preset JSON 가져오기") { importPreset() }
+                        } label: {
+                            Image(systemName: "square.and.arrow.up.on.square")
+                        }
+                        .help("Preset 전체 가져오기·내보내기")
+                        Button {
+                            newPresetName = "새 Preset"
+                            newPresetKind = .regular
+                            showingCreatePreset = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .help("새 Preset 만들기")
+                    }
+                    List(sortedPresets, selection: $selectedID) { preset in
+                        VStack(alignment: .leading) {
+                            Text(preset.name)
+                            Text("\(preset.kind.rawValue) · v\(preset.version)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .tag(preset.id)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    HStack {
+                        Button("이름 변경") {
+                            renamePresetText = draft.name
+                            showingRenamePreset = true
+                        }
+                        .disabled(selectedID == nil)
+                        Button("삭제", role: .destructive) { showingDeletePreset = true }
+                            .disabled(selectedID == nil || store.database.presets.count <= 1)
+                    }
                 }
+                .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onChange(of: selectedID) { _, id in
-                    guard let id, let selected = store.database.presets.first(where: { $0.id == id }) else { return }
-                    draft = selected
-                    updatePreview()
-                }
+                .onChange(of: selectedID) { _, id in loadPreset(id: id) }
         } trailing: {
                 if selectedID != nil {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             Text("Preset 편집").font(.largeTitle.bold())
-                            HStack { TextField("이름", text: $draft.name); TextField("학원명", text: $draft.academyName); TextField("선생님", text: $draft.teacherName) }
+                            HStack {
+                                TextField("이름", text: $draft.name)
+                                TextField("학원명", text: $draft.academyName)
+                                TextField("선생님", text: $draft.teacherName)
+                            }
                             HStack { Text("중간 별점"); Slider(value: $draft.middleThreshold, in: 0...0.95); Text(draft.middleThreshold, format: .percent); Text("높은 별점"); Slider(value: $draft.highThreshold, in: 0.05...1); Text(draft.highThreshold, format: .percent) }
                             if draft.kind == .mock {
                                 Stepper("모의고사 개수: \(draft.mockExamCount ?? 3)개", value: Binding(
@@ -858,10 +909,21 @@ struct PresetsView: View {
                             .id(draft.id)
                             TemplateEditor(title: "출석 문구", text: $draft.presentTemplate)
                             TemplateEditor(title: "동영상 문구", text: $draft.videoTemplate)
+                            TemplateEditor(
+                                title: "공지문 말미 문구 · 개인정보 포함 가능",
+                                text: Binding(
+                                    get: { draft.footerTemplate ?? PresetFooterPolicy.defaultTemplate },
+                                    set: { draft.footerTemplate = $0 }
+                                )
+                            )
+                            Text("교사 연락처 등 개인정보를 입력할 수 있습니다. 내보낸 Preset JSON은 암호화되지 않으므로 안전하게 보관하세요.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             PresetPreviewInputView(draft: $previewDraft)
                             HStack {
                                 Spacer()
-                                Button("새 버전으로 저장") { savePreset() }
+                                Button("현재 Preset 저장") { updateCurrentPreset() }
+                                Button("새 버전으로 저장") { saveNewPresetVersion() }
                                     .buttonStyle(.borderedProminent)
                             }
                             GroupBox("\(previewDraft.attendance.rawValue) 결과 미리보기") {
@@ -885,12 +947,142 @@ struct PresetsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: draft) { _, _ in updatePreview() }
         .onChange(of: previewDraft) { _, _ in updatePreview() }
+        .onAppear {
+            if selectedID == nil { selectedID = sortedPresets.first?.id }
+        }
+        .sheet(isPresented: $showingCreatePreset) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("새 Preset 만들기").font(.title2.bold())
+                TextField("Preset 이름", text: $newPresetName)
+                Picker("종류", selection: $newPresetKind) {
+                    ForEach(PresetKind.allCases) { kind in Text(kind.rawValue).tag(kind) }
+                }
+                HStack {
+                    Spacer()
+                    Button("취소", role: .cancel) { showingCreatePreset = false }
+                    Button("만들기") { createPreset() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(newPresetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(24)
+            .frame(width: 420)
+        }
+        .alert("Preset 이름 변경", isPresented: $showingRenamePreset) {
+            TextField("Preset 이름", text: $renamePresetText)
+            Button("취소", role: .cancel) { }
+            Button("저장") { renameSelectedPreset() }
+                .disabled(renamePresetText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("문구와 버전 번호는 그대로 유지됩니다.")
+        }
+        .confirmationDialog(
+            "Preset 삭제",
+            isPresented: $showingDeletePreset,
+            titleVisibility: .visible
+        ) {
+            Button("‘\(draft.name)’ 삭제", role: .destructive) { deleteSelectedPreset() }
+            Button("취소", role: .cancel) { }
+        } message: {
+            Text("반이나 저장된 수업에서 사용 중이면 다른 Preset으로 안전하게 교체됩니다.")
+        }
     }
+
+    private func loadPreset(id: UUID?) {
+        guard let id, var selected = store.database.presets.first(where: { $0.id == id }) else { return }
+        selected.footerTemplate = selected.effectiveFooterTemplate
+        draft = selected
+        updatePreview()
+    }
+
     private func updatePreview() {
         let input = previewDraft.lessonInput(for: draft)
         do { preview = try TemplateEngine.render(preset: draft, input: input) } catch { preview = "오류: \(error.localizedDescription)" }
     }
-    private func savePreset() { do { try TemplateEngine.validate(draft); store.addPresetVersion(from: draft); store.banner = "새 preset 버전을 저장했습니다." } catch { store.banner = error.localizedDescription } }
+
+    private func createPreset() {
+        do {
+            let id = try store.createPreset(kind: newPresetKind, name: newPresetName)
+            showingCreatePreset = false
+            selectedID = id
+            store.banner = "새 Preset을 만들었습니다."
+        } catch {
+            store.banner = error.localizedDescription
+        }
+    }
+
+    private func renameSelectedPreset() {
+        guard let selectedID else { return }
+        do {
+            try store.renamePreset(id: selectedID, to: renamePresetText)
+            loadPreset(id: selectedID)
+            store.banner = "Preset 이름을 변경했습니다."
+        } catch {
+            store.banner = error.localizedDescription
+        }
+    }
+
+    private func updateCurrentPreset() {
+        do {
+            try store.updatePreset(draft)
+            loadPreset(id: draft.id)
+            store.banner = "현재 Preset을 저장했습니다."
+        } catch {
+            store.banner = error.localizedDescription
+        }
+    }
+
+    private func saveNewPresetVersion() {
+        do {
+            let id = try store.addPresetVersion(from: draft)
+            selectedID = id
+            store.banner = "새 Preset 버전을 저장했습니다."
+        } catch {
+            store.banner = error.localizedDescription
+        }
+    }
+
+    private func deleteSelectedPreset() {
+        guard let selectedID else { return }
+        do {
+            let fallbackID = try store.deletePreset(id: selectedID)
+            self.selectedID = fallbackID
+            store.banner = "Preset을 삭제했습니다. 연결된 반과 수업은 다른 Preset으로 교체했습니다."
+        } catch {
+            store.banner = error.localizedDescription
+        }
+    }
+
+    private func exportSelectedPreset() {
+        guard let selectedID else { return }
+        let panel = NSSavePanel()
+        let safeName = draft.name.replacingOccurrences(of: "/", with: "-")
+        panel.nameFieldStringValue = "\(safeName)-v\(draft.version).notice-preset.json"
+        panel.allowedContentTypes = [.json]
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try store.exportPreset(id: selectedID, to: url)
+                store.banner = "Preset 전체를 JSON으로 저장했습니다. 개인정보가 포함될 수 있으니 안전하게 보관하세요."
+            } catch {
+                store.banner = "Preset 내보내기 실패: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func importPreset() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                let id = try store.importPreset(from: url)
+                selectedID = id
+                store.banner = "Preset 전체를 가져와 새 항목으로 추가했습니다."
+            } catch {
+                store.banner = "Preset 가져오기 실패: \(error.localizedDescription)"
+            }
+        }
+    }
 }
 
 struct TemplateEditor: View {

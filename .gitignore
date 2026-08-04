@@ -11,6 +11,7 @@ tmp/
 kakao-chats-limit-2000.json
 Resources/*
 !Resources/Info.plist
+!Resources/DevVersion.txt
 
 # Runtime databases and backups must never be committed
 database.json

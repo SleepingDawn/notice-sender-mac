@@ -139,6 +139,16 @@ struct MessagePreset: Codable, Identifiable, Hashable, Sendable {
     var absentTemplate: String
     var updatedAt: Date = .now
     var mockExamCount: Int? = nil
+    /// Optional for backward compatibility. Nil uses the app's standard closing text.
+    var footerTemplate: String? = nil
+
+    var effectiveFooterTemplate: String {
+        footerTemplate ?? PresetFooterPolicy.defaultTemplate
+    }
+}
+
+enum PresetFooterPolicy {
+    static let defaultTemplate = "문의사항 있으시면 해당 카톡으로 언제든 연락주세요. 감사합니다."
 }
 
 struct ExamInput: Codable, Hashable, Sendable {

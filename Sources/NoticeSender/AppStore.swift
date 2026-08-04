@@ -302,13 +302,124 @@ final class AppStore: ObservableObject {
         )
     }
 
-    func addPresetVersion(from preset: MessagePreset) {
+    @discardableResult
+    func createPreset(kind: PresetKind, name rawName: String) throws -> UUID {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw PresetManagementError.emptyName }
+        let source = DefaultPresets.all.first(where: { $0.kind == kind }) ?? DefaultPresets.regular
+        var created = source
+        created.id = UUID()
+        created.name = name
+        created.version = 1
+        created.updatedAt = .now
+        created.footerTemplate = source.effectiveFooterTemplate
+        database.presets.append(created)
+        save()
+        return created.id
+    }
+
+    func updatePreset(_ preset: MessagePreset) throws {
+        guard let index = database.presets.firstIndex(where: { $0.id == preset.id }) else {
+            throw PresetManagementError.presetNotFound
+        }
+        let name = preset.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw PresetManagementError.emptyName }
+        var updated = preset
+        updated.name = name
+        updated.updatedAt = .now
+        updated.footerTemplate = updated.effectiveFooterTemplate
+        try TemplateEngine.validate(updated)
+        database.presets[index] = updated
+        save()
+    }
+
+    func renamePreset(id: UUID, to rawName: String) throws {
+        guard let index = database.presets.firstIndex(where: { $0.id == id }) else {
+            throw PresetManagementError.presetNotFound
+        }
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw PresetManagementError.emptyName }
+        database.presets[index].name = name
+        database.presets[index].updatedAt = .now
+        save()
+    }
+
+    @discardableResult
+    func addPresetVersion(from preset: MessagePreset) throws -> UUID {
+        let name = preset.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw PresetManagementError.emptyName }
+        try TemplateEngine.validate(preset)
         var next = preset
         next.id = UUID()
-        next.version = (database.presets.filter { $0.kind == preset.kind }.map(\.version).max() ?? 0) + 1
+        next.name = name
+        next.version = (database.presets.filter { $0.kind == preset.kind && $0.name == name }.map(\.version).max() ?? 0) + 1
         next.updatedAt = .now
+        next.footerTemplate = next.effectiveFooterTemplate
         database.presets.append(next)
         save()
+        return next.id
+    }
+
+    @discardableResult
+    func deletePreset(id: UUID) throws -> UUID {
+        guard database.presets.count > 1 else { throw PresetManagementError.cannotDeleteLastPreset }
+        guard database.presets.contains(where: { $0.id == id }) else {
+            throw PresetManagementError.presetNotFound
+        }
+        database.presets.removeAll { $0.id == id }
+        let fallback = database.presets.first(where: { $0.kind == .direct }) ?? database.presets[0]
+        for index in database.classes.indices where database.classes[index].defaultPresetID == id {
+            database.classes[index].defaultPresetID = fallback.id
+            database.classes[index].version += 1
+        }
+        if var plans = database.lessonPlans {
+            for index in plans.indices where plans[index].presetID == id {
+                plans[index].presetID = fallback.id
+                plans[index].updatedAt = .now
+            }
+            database.lessonPlans = plans
+        }
+        if currentBatch?.metadata.presetID == id {
+            currentBatch = nil
+            validationIssues = []
+        }
+        save()
+        return fallback.id
+    }
+
+    func exportPreset(id: UUID, to url: URL) throws {
+        guard var preset = database.presets.first(where: { $0.id == id }) else {
+            throw PresetArchiveError.presetNotFound
+        }
+        preset.footerTemplate = preset.effectiveFooterTemplate
+        try TemplateEngine.validate(preset)
+        try encoder.encode(PresetArchive(preset: preset)).write(to: url, options: .atomic)
+    }
+
+    @discardableResult
+    func importPreset(from url: URL) throws -> UUID {
+        let archive = try decoder.decode(PresetArchive.self, from: Data(contentsOf: url))
+        guard archive.schemaVersion == PresetArchive.currentSchemaVersion else {
+            throw PresetArchiveError.unsupportedSchema(archive.schemaVersion)
+        }
+        var imported = archive.preset
+        do {
+            try TemplateEngine.validate(imported)
+        } catch {
+            throw PresetArchiveError.invalidPreset(error.localizedDescription)
+        }
+        imported.id = UUID()
+        imported.footerTemplate = imported.effectiveFooterTemplate
+        let matchingVersions = database.presets
+            .filter { $0.kind == imported.kind && $0.name == imported.name }
+            .map(\.version)
+        imported.version = matchingVersions.isEmpty
+            ? max(1, imported.version)
+            : (matchingVersions.max() ?? 0) + 1
+        imported.updatedAt = .now
+        database.presets.append(imported)
+        save()
+        return imported.id
     }
 
     func saveLessonPlan(_ plan: LessonPlan) {

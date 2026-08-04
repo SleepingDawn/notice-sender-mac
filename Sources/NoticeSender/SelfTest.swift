@@ -464,6 +464,58 @@ enum SelfTest {
             let message = try TemplateEngine.render(preset: editableDraft, input: sampleInput(homework: 8, homeworkMax: 10, test: 8, testMax: 10))
             return editableDraft.id == selected.id && editableDraft.name == "일반 수업 수정본" && message.contains("공지")
         }
+        check("Preset 전체 JSON 개인정보 포함 왕복", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-preset-archive-\(UUID().uuidString)", isDirectory: true)
+            let sourceFile = root.appendingPathComponent("source.json")
+            let targetFile = root.appendingPathComponent("target.json")
+            let archiveFile = root.appendingPathComponent("teacher.notice-preset.json")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let sourceStore = AppStore(databaseURL: sourceFile)
+            guard var sourcePreset = sourceStore.database.presets.first(where: { $0.kind == .regular }) else { return false }
+            sourcePreset.name = "개인정보 포함 Preset"
+            sourcePreset.teacherName = "테스트 교사"
+            sourcePreset.academyName = "테스트 학원"
+            sourcePreset.footerTemplate = "담당: {{teacher}}\n연락처: 010-0000-0000"
+            try sourceStore.updatePreset(sourcePreset)
+            try sourceStore.exportPreset(id: sourcePreset.id, to: archiveFile)
+
+            let targetStore = AppStore(databaseURL: targetFile)
+            let importedID = try targetStore.importPreset(from: archiveFile)
+            guard let imported = targetStore.database.presets.first(where: { $0.id == importedID }) else { return false }
+            let rendered = try TemplateEngine.render(preset: imported, input: sampleInput(homework: 8, homeworkMax: 10, test: 8, testMax: 10))
+            return imported.id != sourcePreset.id
+                && imported.name == sourcePreset.name
+                && imported.teacherName == "테스트 교사"
+                && imported.academyName == "테스트 학원"
+                && imported.footerTemplate == sourcePreset.footerTemplate
+                && rendered.contains("담당: 테스트 교사")
+                && rendered.contains("010-0000-0000")
+        }
+        check("Preset 생성·이름 변경·저장·버전·삭제", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-preset-crud-\(UUID().uuidString)", isDirectory: true)
+            let file = root.appendingPathComponent("database.json")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = AppStore(databaseURL: file)
+            let createdID = try store.createPreset(kind: .regular, name: "사용자 Preset")
+            try store.renamePreset(id: createdID, to: "이름 변경 Preset")
+            guard var created = store.database.presets.first(where: { $0.id == createdID }) else { return false }
+            created.footerTemplate = "개인정보 말미"
+            created.presentTemplate += "\n저장 확인"
+            try store.updatePreset(created)
+            let versionID = try store.addPresetVersion(from: created)
+            guard let version = store.database.presets.first(where: { $0.id == versionID }) else { return false }
+            let group = ClassGroup(name: "Preset 연결 반", school: "테스트", admissionYear: 26, defaultPresetID: versionID)
+            store.database.classes.append(group)
+            store.database.lessonPlans = [LessonPlan(classID: group.id, presetID: versionID)]
+            let fallbackID = try store.deletePreset(id: versionID)
+            return store.database.presets.first(where: { $0.id == createdID })?.footerTemplate == "개인정보 말미"
+                && version.version == 2
+                && !store.database.presets.contains(where: { $0.id == versionID })
+                && store.database.classes.first(where: { $0.id == group.id })?.defaultPresetID == fallbackID
+                && store.database.lessonPlans?.first?.presetID == fallbackID
+        }
         check("Preset 출석·동영상 2분기만 허용", failures: &failures) {
             var preset = DefaultPresets.regular
             preset.absentTemplate = ""
