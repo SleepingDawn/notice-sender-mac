@@ -898,6 +898,8 @@ struct LessonManagementView: View {
     @State private var isPreparingSend = false
     @State private var lessonDryRun = true
     @State private var lessonSelectionRevision = 0
+    @State private var isCommonMessageEnabled = false
+    @State private var commonMessage = ""
     @State private var showingMissingNicknameWarning = false
     @State private var missingNicknameIssues: [DirectNoticeNicknameIssue] = []
     @State private var lessonAttachmentPaths: [UUID: [String]] = [:]
@@ -914,7 +916,8 @@ struct LessonManagementView: View {
         let includedRows = PreparedNoticeSelection.includedRows(performanceRows)
         guard !includedRows.isEmpty else { return false }
         if preset.kind == .direct {
-            return PreparedNoticeSelection.directMessagesAreReady(in: performanceRows, allowEmptyMessages: lessonDryRun)
+            return effectiveCommonMessage != nil
+                || PreparedNoticeSelection.directMessagesAreReady(in: performanceRows, allowEmptyMessages: lessonDryRun)
         }
         guard !draft.progress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         switch preset.kind {
@@ -926,13 +929,19 @@ struct LessonManagementView: View {
         }
     }
 
+    private var effectiveCommonMessage: String? {
+        CommonMessagePolicy.effectiveMessage(isEnabled: isCommonMessageEnabled, text: commonMessage)
+    }
+
     private var previewRows: [LessonPreviewRow] {
         guard let group, var resolvedPreset = preset else { return [] }
         if resolvedPreset.kind == .direct {
             return PreparedNoticeSelection.includedRows(performanceRows).compactMap { performance in
                 guard let student = store.student(id: performance.id) else { return nil }
                 let message = DirectNoticeMessage.normalized(performance.noticeMessage)
-                let error = message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !lessonDryRun
+                let error = message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && effectiveCommonMessage == nil
+                    && !lessonDryRun
                     ? "공지 멘트가 비어 있습니다."
                     : nil
                 return LessonPreviewRow(
@@ -1053,6 +1062,7 @@ struct LessonManagementView: View {
                     LessonTextField(title: "공지", text: lessonTextBinding(\.notice), onBeginEditing: recordUndoSnapshot).frame(height: 82)
                 }.frame(maxWidth: .infinity)
             }
+            commonMessageSection
             GroupBox("학생별 입력표 · 성명 오름차순") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -1076,6 +1086,12 @@ struct LessonManagementView: View {
         }.padding(20)
         .onAppear { ensureDraft(); rebuildPerformanceRows() }
         .onChange(of: performanceRows.map(\.isIncluded)) { _, _ in
+            invalidateLessonBatchForSelectionChange()
+        }
+        .onChange(of: isCommonMessageEnabled) { _, _ in
+            invalidateLessonBatchForSelectionChange()
+        }
+        .onChange(of: commonMessage) { _, _ in
             invalidateLessonBatchForSelectionChange()
         }
         .onChange(of: draft.classID) { _, newClassID in
@@ -1106,6 +1122,25 @@ struct LessonManagementView: View {
         }
     }
 
+    private var commonMessageSection: some View {
+        GroupBox("공통 메시지") {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("공통 메시지 사용", isOn: $isCommonMessageEnabled)
+                    .toggleStyle(.checkbox)
+                    .disabled(kakao.isBusy || isPreparingSend)
+                TextEditor(text: $commonMessage)
+                    .frame(height: 82)
+                    .disabled(!isCommonMessageEnabled || kakao.isBusy || isPreparingSend)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
+                Text(effectiveCommonMessage == nil
+                     ? "체크가 꺼져 있거나 공백·줄바꿈만 입력된 경우 사용하지 않습니다."
+                     : "발송 체크된 학생마다 학생별 공지 다음에 한 번씩 전송됩니다.")
+                    .font(.caption)
+                    .foregroundStyle(effectiveCommonMessage == nil ? Color.secondary : Color.blue)
+            }.padding(6)
+        }
+    }
+
     private var lessonPreviewSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -1121,7 +1156,7 @@ struct LessonManagementView: View {
                 TableColumn("학생", value: \.studentName).width(75)
                 TableColumn("호칭", value: \.nickname).width(75)
                 TableColumn("발송 예정 문구") { row in
-                    let display = row.error ?? row.message
+                    let display = row.error ?? lessonPreviewMessage(for: row)
                     Text(display)
                         .lineLimit(3)
                         .foregroundStyle(row.error == nil ? Color.primary : Color.red)
@@ -1157,7 +1192,7 @@ struct LessonManagementView: View {
             if let id = selectedPreviewStudentID, let row = previewRows.first(where: { $0.studentID == id }) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(row.error ?? row.message).textSelection(.enabled)
+                        Text(row.error ?? lessonPreviewMessage(for: row)).textSelection(.enabled)
                         let paths = lessonAttachmentPaths[id] ?? []
                         if let notice = AttachmentDeliveryNotice.preview(studentName: row.studentName, paths: paths) {
                             Divider()
@@ -1175,6 +1210,19 @@ struct LessonManagementView: View {
                     .padding(8)
             }
         }.frame(height: 190)
+    }
+
+    private func lessonPreviewMessage(for row: LessonPreviewRow) -> String {
+        let messages = CommonMessagePolicy.orderedMessages(
+            individualNotice: row.message,
+            commonMessage: effectiveCommonMessage
+        )
+        return messages.enumerated().map { index, message in
+            let label = index == 0 && !row.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "학생별 공지"
+                : "공통 메시지"
+            return "[\(label)]\n\(message)"
+        }.joined(separator: "\n\n")
     }
 
     private func handleLessonClassChange(_ newClassID: UUID) {
@@ -1389,14 +1437,20 @@ struct LessonManagementView: View {
                 issues.append(ValidationIssue(severity: .error, message: "\(row.studentName): \(error)"))
                 return nil
             }
+            let messages = CommonMessagePolicy.orderedMessages(
+                individualNotice: row.message,
+                commonMessage: effectiveCommonMessage
+            )
+            guard let firstMessage = messages.first else { return nil }
             return BatchItem(
                 studentID: row.studentID,
                 studentName: row.studentName,
                 nickname: row.nickname,
                 chatRoomName: row.chatRoomName,
-                message: row.message,
+                message: firstMessage,
                 chatID: store.student(id: row.studentID)?.chatID,
-                preserveMessageWhitespace: preset.kind == .direct
+                additionalMessages: Array(messages.dropFirst()),
+                preserveMessageWhitespace: preset.kind == .direct || effectiveCommonMessage != nil
             )
         }
         if items.count != includedCount {
@@ -1489,8 +1543,9 @@ struct LessonManagementView: View {
         missingNicknameIssues = DirectNoticeNicknameValidator.issuesIfWarningRequired(
             isDryRun: lessonDryRun,
             presetKind: preset.kind,
-            items: previewRows.map {
-                (studentID: $0.studentID, studentName: $0.studentName, nickname: $0.nickname, message: $0.message)
+            items: previewRows.compactMap {
+                guard !$0.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                return (studentID: $0.studentID, studentName: $0.studentName, nickname: $0.nickname, message: $0.message)
             }
         )
         guard !missingNicknameIssues.isEmpty else {
@@ -1669,8 +1724,6 @@ struct SendingView: View {
     @State private var dryRun = true
     @State private var reviewed = false
     @State private var confirmRealSend = false
-    @State private var commonClassID: UUID?
-    @State private var commonMessages: [String] = [""]
     @State private var isScanningAttachments = false
     @State private var isPreparingRealSend = false
     @State private var showingMissingNicknameWarning = false
@@ -1695,28 +1748,6 @@ struct SendingView: View {
             KakaoPreparationGuide()
             if let summary = kakao.lastRunSummary {
                 KakaoRunSummaryCard(summary: summary, onDismiss: kakao.clearLastRunSummary)
-            }
-            GroupBox("반 전체 공통 메시지 · 최대 5개 개별 전송") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Picker("반", selection: $commonClassID) {
-                            Text("반 선택").tag(UUID?.none)
-                            ForEach(store.database.classes) { Text($0.name).tag(Optional($0.id)) }
-                        }.frame(width: 250)
-                        Spacer()
-                        Button("메시지 추가") { if commonMessages.count < 5 { commonMessages.append("") } }.disabled(commonMessages.count >= 5)
-                        Button("공통 메시지로 발송 목록 만들기") { prepareCommonMessageBatch() }
-                            .buttonStyle(.borderedProminent).disabled(commonClassID == nil || commonMessages.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-                    }
-                    ForEach(commonMessages.indices, id: \.self) { index in
-                        HStack(alignment: .top) {
-                            Text("\(index + 1)").font(.headline).frame(width: 24)
-                            TextEditor(text: $commonMessages[index]).frame(height: 58).overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
-                            Button(role: .destructive) { commonMessages.remove(at: index) } label: { Image(systemName: "trash") }
-                                .disabled(commonMessages.count == 1)
-                        }
-                    }
-                }.padding(6)
             }
             GroupBox("학생별 첨부파일 폴더") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -2007,24 +2038,6 @@ struct SendingView: View {
     private static let defaultDateText: String = {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "ko_KR"); formatter.dateFormat = "M월 d일"; return formatter.string(from: .now)
     }()
-
-    private func prepareCommonMessageBatch() {
-        guard let commonClassID, let group = store.group(id: commonClassID) else { return }
-        let messages = commonMessages.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.prefix(5)
-        guard let first = messages.first else { return }
-        let remaining = Array(messages.dropFirst())
-        let items = group.members.compactMap { member -> BatchItem? in
-            guard let student = store.student(id: member.studentID) else { return nil }
-            return BatchItem(studentID: student.id, studentName: student.name, nickname: student.nickname, chatRoomName: student.chatRoomName, message: first, chatID: student.chatID, additionalMessages: remaining)
-        }
-        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "ko_KR"); formatter.dateFormat = "M월 d일"
-        let metadata = BatchMetadata(schemaVersion: 1, classID: group.id, sessionID: UUID(), date: formatter.string(from: .now), presetID: UUID(), presetVersion: 0, isLegacy: true)
-        let batch = SendBatch(metadata: metadata, items: items)
-        store.currentBatch = batch
-        store.validationIssues = BatchParser.validate(batch: batch, database: store.database)
-        reviewed = false
-        store.banner = "공통 메시지 \(messages.count)개를 \(items.count)명의 개별 메시지로 준비했습니다."
-    }
 
     private func chooseAttachmentFolder() {
         let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false

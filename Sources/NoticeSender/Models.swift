@@ -205,6 +205,26 @@ struct BatchItem: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+enum CommonMessagePolicy {
+    static func effectiveMessage(isEnabled: Bool, text: String) -> String? {
+        guard isEnabled,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return text
+    }
+
+    /// Keeps every student's own notice first and the shared message second.
+    /// Empty/whitespace-only values are not included in the send sequence.
+    static func orderedMessages(individualNotice: String, commonMessage: String?) -> [String] {
+        [individualNotice, commonMessage].compactMap { message in
+            guard let message,
+                  !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            return message
+        }
+    }
+}
+
 struct SendBatch: Codable, Identifiable, Hashable, Sendable {
     var id: UUID = UUID()
     var metadata: BatchMetadata

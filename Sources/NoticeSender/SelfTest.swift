@@ -502,6 +502,39 @@ enum SelfTest {
             return AttachmentDeliveryNotice.preview(studentName: students[0].name, paths: items[0].attachmentPaths ?? []) == "윤서진A 학생에게 2개 파일이 전송됩니다."
                 && AttachmentDeliveryNotice.confirmation(in: items) == "[윤서진A, 윤서진B]에게 파일이 함께 발송됩니다."
         }
+        check("공통 메시지 체크·빈 문자열 사용 규칙", failures: &failures) {
+            let message = "  공통 안내입니다.\n다음 줄  "
+            return CommonMessagePolicy.effectiveMessage(isEnabled: false, text: message) == nil
+                && CommonMessagePolicy.effectiveMessage(isEnabled: true, text: " \n\t ") == nil
+                && CommonMessagePolicy.effectiveMessage(isEnabled: true, text: message) == message
+        }
+        check("학생별 공지 다음 공통 메시지 순서·공통만 발송", failures: &failures) {
+            let common = "공통 메시지"
+            return CommonMessagePolicy.orderedMessages(individualNotice: "학생 A 공지", commonMessage: common) == ["학생 A 공지", common]
+                && CommonMessagePolicy.orderedMessages(individualNotice: " \n ", commonMessage: common) == [common]
+                && CommonMessagePolicy.orderedMessages(individualNotice: "학생 A 공지", commonMessage: nil) == ["학생 A 공지"]
+        }
+        check("발송 체크 학생에게만 공통 메시지·학생 단위 순차 발송", failures: &failures) {
+            let studentA = PreparedNoticeRow(id: UUID(), number: 1, name: "학생 A", nickname: "A", noticeMessage: "메시지 A")
+            var excluded = PreparedNoticeRow(id: UUID(), number: 2, name: "제외 학생", nickname: "제외", noticeMessage: "제외 메시지")
+            excluded.isIncluded = false
+            let studentB = PreparedNoticeRow(id: UUID(), number: 3, name: "학생 B", nickname: "B", noticeMessage: "메시지 B")
+            let common = CommonMessagePolicy.effectiveMessage(isEnabled: true, text: "공통 메시지")
+            let items = PreparedNoticeSelection.includedRows([studentA, excluded, studentB]).map { row in
+                let messages = CommonMessagePolicy.orderedMessages(individualNotice: row.noticeMessage, commonMessage: common)
+                return BatchItem(
+                    studentID: row.id,
+                    studentName: row.name,
+                    nickname: row.nickname,
+                    chatRoomName: "\(row.name) 방",
+                    message: messages[0],
+                    additionalMessages: Array(messages.dropFirst()),
+                    preserveMessageWhitespace: true
+                )
+            }
+            return items.map(\.studentName) == ["학생 A", "학생 B"]
+                && items.flatMap(\.allMessages) == ["메시지 A", "공통 메시지", "메시지 B", "공통 메시지"]
+        }
         check("공통 메시지 최대 5개 개별 유지", failures: &failures) {
             let student = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "테스트방")
             let item = BatchItem(studentID: student.id, studentName: student.name, nickname: student.nickname, chatRoomName: student.chatRoomName, message: "1", additionalMessages: ["2", "3", "4", "5"])
