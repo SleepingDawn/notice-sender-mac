@@ -13,7 +13,7 @@ enum TemplateVariableCatalog {
         .init(token: "student_name", label: "학생 이름", detail: "학생의 전체 이름"),
         .init(token: "nickname", label: "학생 호칭", detail: "학생별로 설정한 자연스러운 호칭"),
         .init(token: "date", label: "수업 날짜", detail: "이번 수업 날짜"),
-        .init(token: "attendance", label: "출결 상태", detail: "출석·동영상·결석 상태"),
+        .init(token: "attendance", label: "수업 방식", detail: "출석 또는 동영상 상태"),
         .init(token: "attitude_stars", label: "수업 태도 별점", detail: "수업 태도를 별표로 변환한 값"),
         .init(token: "attitude_comment", label: "수업 태도 코멘트", detail: "태도 점수에 맞춘 설명"),
         .init(token: "homework_stars", label: "과제 별점", detail: "과제 성취도를 별표로 변환한 값"),

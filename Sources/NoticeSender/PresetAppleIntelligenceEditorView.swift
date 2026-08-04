@@ -72,7 +72,6 @@ struct PresetAppleIntelligenceEditorView: View {
                     Text(revision.summary).font(.headline)
                     revisionPreview("출석 문구", text: revision.presentTemplate)
                     revisionPreview("동영상 문구", text: revision.videoTemplate)
-                    revisionPreview("결석 문구", text: revision.absentTemplate)
                     HStack {
                         Spacer()
                         Button("초안 버리기", role: .cancel) {

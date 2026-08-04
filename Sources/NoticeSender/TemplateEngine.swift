@@ -5,6 +5,7 @@ enum TemplateValidationError: LocalizedError {
     case emptyTemplate(String)
     case unknownToken(String)
     case malformedPlaceholder(String)
+    case unsupportedAttendance(String)
 
     var errorDescription: String? {
         switch self {
@@ -12,6 +13,7 @@ enum TemplateValidationError: LocalizedError {
         case .emptyTemplate(let name): "\(name) 문구가 비어 있습니다."
         case .unknownToken(let token): "지원하지 않는 변수입니다: {{\(token)}}"
         case .malformedPlaceholder(let name): "\(name) 문구에 닫히지 않았거나 잘못된 변수 표시가 있습니다."
+        case .unsupportedAttendance(let value): "출결은 출석 또는 동영상만 사용할 수 있습니다: \(value)"
         }
     }
 }
@@ -29,7 +31,7 @@ enum TemplateEngine {
         guard preset.middleThreshold >= 0, preset.highThreshold <= 1, preset.middleThreshold < preset.highThreshold else {
             throw TemplateValidationError.invalidThresholds
         }
-        for (name, template) in [("출석", preset.presentTemplate), ("동영상", preset.videoTemplate), ("결석", preset.absentTemplate)] {
+        for (name, template) in [("출석", preset.presentTemplate), ("동영상", preset.videoTemplate)] {
             guard !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw TemplateValidationError.emptyTemplate(name) }
             guard hasWellFormedPlaceholders(in: template) else {
                 throw TemplateValidationError.malformedPlaceholder(name)
@@ -42,11 +44,13 @@ enum TemplateEngine {
 
     static func render(preset: MessagePreset, input: LessonInput) throws -> String {
         try validate(preset)
-        let normalizedAttendance = input.attendance.trimmingCharacters(in: .whitespacesAndNewlines)
-        let template: String
-        if normalizedAttendance == "출석" { template = preset.presentTemplate }
-        else if normalizedAttendance == "동영상" { template = preset.videoTemplate }
-        else { template = preset.absentTemplate }
+        guard let attendance = LessonAttendanceMode(normalized: input.attendance) else {
+            throw TemplateValidationError.unsupportedAttendance(input.attendance)
+        }
+        let template = switch attendance {
+        case .present: preset.presentTemplate
+        case .video: preset.videoTemplate
+        }
 
         let attitudeComment: String
         switch input.attitude {
@@ -61,7 +65,7 @@ enum TemplateEngine {
             "student_name": input.studentName,
             "nickname": input.nickname,
             "date": input.date,
-            "attendance": input.attendance,
+            "attendance": attendance.rawValue,
             "attitude_stars": input.attitude.hasPrefix("3") ? "★★★" : "★★☆",
             "attitude_comment": attitudeComment,
             "homework_stars": stars(score: input.homeworkScore, maximum: input.homeworkMaximum, preset: preset, missing: "과제를 제출하지 않았습니다."),

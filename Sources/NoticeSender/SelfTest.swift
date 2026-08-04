@@ -304,8 +304,8 @@ enum SelfTest {
                 ) == 300
         }
         check("첫 화면 앱 버전 표기", failures: &failures) {
-            AppVersion.formatted(shortVersion: "2.5.11", build: "45") == "v2.5.11 (빌드 45)"
-                && AppVersion.formatted(shortVersion: "2.5.11", build: nil) == "v2.5.11"
+            AppVersion.formatted(shortVersion: "2.7.0", build: "46") == "v2.7.0 (빌드 46)"
+                && AppVersion.formatted(shortVersion: "2.7.0", build: nil) == "v2.7.0"
                 && AppVersion.formatted(shortVersion: nil, build: "45") == "버전 정보 없음"
         }
         check("반 JSON 파일 다른 DB 왕복·학생 연결", failures: &failures) {
@@ -464,6 +464,52 @@ enum SelfTest {
             let message = try TemplateEngine.render(preset: editableDraft, input: sampleInput(homework: 8, homeworkMax: 10, test: 8, testMax: 10))
             return editableDraft.id == selected.id && editableDraft.name == "일반 수업 수정본" && message.contains("공지")
         }
+        check("Preset 출석·동영상 2분기만 허용", failures: &failures) {
+            var preset = DefaultPresets.regular
+            preset.absentTemplate = ""
+            try TemplateEngine.validate(preset)
+            var input = sampleInput(homework: 8, homeworkMax: 10, test: 8, testMax: 10)
+            input.attendance = "동영상"
+            let video = try TemplateEngine.render(preset: preset, input: input)
+            input.attendance = "결석"
+            let absentRejected: Bool
+            do {
+                _ = try TemplateEngine.render(preset: preset, input: input)
+                absentRejected = false
+            } catch TemplateValidationError.unsupportedAttendance {
+                absentRejected = true
+            }
+            return LessonAttendanceMode.allCases == [.present, .video]
+                && video.contains("동영상")
+                && absentRejected
+        }
+        check("Preset interactive 미리보기 입력 전체 반영", failures: &failures) {
+            let previewDraft = PresetPreviewDraft(
+                attendance: .video,
+                progress: "사용자 진도",
+                assignment: "사용자 숙제",
+                examUnit: "사용자 시험 단원",
+                notice: "사용자 공지",
+                homeworkProblemCount: 31,
+                homeworkSolvedCount: 27,
+                testProblemCount: 17,
+                testSolvedCount: 13,
+                homeworkComment: "사용자 숙제 코멘트",
+                testComment: "사용자 테스트 코멘트"
+            )
+            let input = previewDraft.lessonInput(for: DefaultPresets.regular)
+            return input.attendance == "동영상"
+                && input.progress == "사용자 진도"
+                && input.assignment == "사용자 숙제"
+                && input.examUnit == "사용자 시험 단원"
+                && input.notice == "사용자 공지"
+                && input.homeworkMaximum == 31
+                && input.homeworkScore == 27
+                && input.testMaximum == 17
+                && input.testScore == 13
+                && input.homeworkComment == "사용자 숙제 코멘트"
+                && input.testComment == "사용자 테스트 코멘트"
+        }
         check("Preset 변수 사용자 설명과 엔진 지원 목록 일치", failures: &failures) {
             Set(TemplateVariableCatalog.all.map(\.token)) == TemplateEngine.supportedTokens
                 && TemplateVariableCatalog.all.allSatisfy {
@@ -475,7 +521,6 @@ enum SelfTest {
             let revision = PresetAIRevision(
                 presentTemplate: "{{nickname}} 출석 안내\n{{progress}}\n{{notice}}",
                 videoTemplate: "{{nickname}} 동영상 안내\n{{assignment}}\n{{notice}}",
-                absentTemplate: "{{nickname}} 결석 안내\n{{exam_unit}}\n{{notice}}",
                 summary: "문구를 간결하게 변경"
             )
             guard let applied = try? AppleIntelligencePresetEditor.applying(revision, to: source) else {
@@ -484,7 +529,6 @@ enum SelfTest {
             let invalid = PresetAIRevision(
                 presentTemplate: "{{unknown_ai_token}}",
                 videoTemplate: revision.videoTemplate,
-                absentTemplate: revision.absentTemplate,
                 summary: "잘못된 변수"
             )
             let invalidRejected: Bool
@@ -506,6 +550,7 @@ enum SelfTest {
             return applied.id == source.id
                 && applied.version == source.version
                 && applied.presentTemplate == revision.presentTemplate
+                && applied.absentTemplate == source.absentTemplate
                 && invalidRejected
                 && malformedRejected
         }
@@ -517,6 +562,7 @@ enum SelfTest {
             )
             return prompt.contains("학생 호칭과 날짜를 넣어줘")
                 && prompt.contains(preset.presentTemplate)
+                && !prompt.contains("현재 결석 문구")
                 && TemplateVariableCatalog.all.allSatisfy {
                     prompt.contains("{{\($0.token)}}")
                 }

@@ -821,6 +821,7 @@ struct PresetsView: View {
     @State private var selectedID: UUID?
     @State private var draft: MessagePreset = DefaultPresets.first
     @State private var preview = ""
+    @State private var previewDraft = PresetPreviewDraft()
 
     var body: some View {
         InitialRatioSplitView(
@@ -857,9 +858,21 @@ struct PresetsView: View {
                             .id(draft.id)
                             TemplateEditor(title: "출석 문구", text: $draft.presentTemplate)
                             TemplateEditor(title: "동영상 문구", text: $draft.videoTemplate)
-                            TemplateEditor(title: "결석 문구", text: $draft.absentTemplate)
-                            HStack { Button("예시 새로고침") { updatePreview() }; Button("새 버전으로 저장") { savePreset() }.buttonStyle(.borderedProminent) }
-                            GroupBox("고점 출석 예시") { ScrollView { Text(preview).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(8) } }.frame(minHeight: 260)
+                            PresetPreviewInputView(draft: $previewDraft)
+                            HStack {
+                                Spacer()
+                                Button("새 버전으로 저장") { savePreset() }
+                                    .buttonStyle(.borderedProminent)
+                            }
+                            GroupBox("\(previewDraft.attendance.rawValue) 결과 미리보기") {
+                                ScrollView {
+                                    Text(preview)
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(8)
+                                }
+                            }
+                            .frame(minHeight: 260)
                         }
                         .padding(20)
                     }
@@ -870,9 +883,11 @@ struct PresetsView: View {
                 }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: draft) { _, _ in updatePreview() }
+        .onChange(of: previewDraft) { _, _ in updatePreview() }
     }
     private func updatePreview() {
-        let input = LessonInput(studentID: UUID(), studentName: "홍길동", nickname: "길동이", date: "7월 12일", attendance: "출석", attitude: "3", homeworkScore: 18, homeworkMaximum: 20, testScore: 9, testMaximum: 10, homeworkComment: "숙제를 성실하게 했습니다.", testComment: "틀린 문제를 복습해주세요.", progress: "화학 결합과 분자 구조", assignment: "교재 20~35번", examUnit: "화학 결합", notice: "복습과 숙제를 꼼꼼히 해주세요.", exams: [ExamInput(title: "모의고사 1회", score: 92, maximum: 100, average: 76.5, highest: 98, rank: 2, attendees: 10, comment: "계산 과정을 꼼꼼히 쓰세요.")])
+        let input = previewDraft.lessonInput(for: draft)
         do { preview = try TemplateEngine.render(preset: draft, input: input) } catch { preview = "오류: \(error.localizedDescription)" }
     }
     private func savePreset() { do { try TemplateEngine.validate(draft); store.addPresetVersion(from: draft); store.banner = "새 preset 버전을 저장했습니다." } catch { store.banner = error.localizedDescription } }
@@ -1392,7 +1407,7 @@ struct LessonManagementView: View {
                 let targetIndex: Int?
                 if let nameColumn, row.indices.contains(nameColumn), !row[nameColumn].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     targetIndex = performanceRows.firstIndex { $0.name == row[nameColumn].trimmingCharacters(in: .whitespacesAndNewlines) }
-                } else if row.indices.contains(attendanceColumn), ["출석", "동영상", "결석"].contains(row[attendanceColumn]), sequentialIndex < performanceRows.count {
+                } else if row.indices.contains(attendanceColumn), LessonAttendanceMode(normalized: row[attendanceColumn]) != nil, sequentialIndex < performanceRows.count {
                     targetIndex = sequentialIndex; sequentialIndex += 1
                 } else { targetIndex = nil }
                 guard let targetIndex else { continue }

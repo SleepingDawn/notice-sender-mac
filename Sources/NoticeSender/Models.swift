@@ -10,6 +10,17 @@ enum PresetKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+enum LessonAttendanceMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case present = "출석"
+    case video = "동영상"
+
+    var id: String { rawValue }
+
+    init?(normalized value: String) {
+        self.init(rawValue: value.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+}
+
 struct Student: Codable, Identifiable, Hashable, Sendable {
     var id: UUID = UUID()
     var name: String
@@ -123,6 +134,8 @@ struct MessagePreset: Codable, Identifiable, Hashable, Sendable {
     var middleThreshold: Double = 0.5
     var presentTemplate: String
     var videoTemplate: String
+    /// Retained only so databases created before v2.7 remain decodable.
+    /// Rendering and editing support only the present/video templates.
     var absentTemplate: String
     var updatedAt: Date = .now
     var mockExamCount: Int? = nil

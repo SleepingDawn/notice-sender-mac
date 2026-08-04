@@ -113,6 +113,7 @@ enum BatchParser {
               let messageColumn = headers.firstIndex(where: { ["notice_message", "공지 멘트"].contains($0) }) else {
             return ParsedBatchResult(batch: nil, issues: [ValidationIssue(severity: .error, message: "필수 열이 없습니다.")])
         }
+        let attendanceColumn = headers.firstIndex(where: { ["attendance", "출석"].contains($0) })
         var items: [BatchItem] = []
         var foundStudentRow = false
         for (offset, row) in rows.dropFirst(headerIndex + 1).enumerated() {
@@ -127,6 +128,14 @@ enum BatchParser {
             let name = value(row, nameColumn)
             let nickname = value(row, nicknameColumn)
             let message = value(row, messageColumn)
+            if let attendanceColumn,
+               LessonAttendanceMode(normalized: value(row, attendanceColumn)) == nil {
+                issues.append(ValidationIssue(
+                    severity: .error,
+                    row: offset + 1,
+                    message: "출결은 출석 또는 동영상만 사용할 수 있습니다."
+                ))
+            }
             guard let student = database.students.first(where: { $0.id == id }) else {
                 issues.append(ValidationIssue(severity: .error, row: offset + 1, message: "로컬 DB에 없는 학생 UUID입니다.")); continue
             }
@@ -150,7 +159,7 @@ enum BatchParser {
         let memberStudents = group.members.compactMap { member in database.students.first { $0.id == member.studentID } }
         let dataRows = rows.dropFirst(3).prefix { row in
             let attendance = value(row, 0)
-            return ["출석", "동영상", "결석"].contains(attendance)
+            return LessonAttendanceMode(normalized: attendance) != nil
         }
         for (index, row) in dataRows.enumerated() {
             guard index < memberStudents.count else {
