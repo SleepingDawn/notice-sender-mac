@@ -21,9 +21,44 @@ enum ClipboardError: LocalizedError {
 
 enum SheetTemplateBuilder {
     static func build(group: ClassGroup, students: [Student], preset: MessagePreset) -> SheetTemplate {
-        preset.kind == .mock
-            ? buildMock(group: group, students: students, preset: preset)
-            : buildLesson(group: group, students: students, preset: preset)
+        switch preset.kind.category {
+        case .direct: buildDirect(group: group, students: students, preset: preset)
+        case .regular: buildLesson(group: group, students: students, preset: preset)
+        case .mock: buildMock(group: group, students: students, preset: preset)
+        }
+    }
+
+    private static func buildDirect(group: ClassGroup, students: [Student], preset: MessagePreset) -> SheetTemplate {
+        let sessionID = UUID()
+        let memberStudents = group.members.compactMap { member in students.first { $0.id == member.studentID } }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        // A:D is the only visible table. E:H carries narrow identity and safety data.
+        let columnCount = 8
+        var rows = [Array(repeating: "", count: columnCount)]
+        rows[0] = ["번호", "발송", "성명", "메시지", "student_id", "nickname", "", ""]
+        for (offset, student) in memberStudents.enumerated() {
+            let nickname = group.members.first(where: { $0.studentID == student.id })?.nicknameOverride?.nilIfEmpty ?? student.nickname
+            rows.append([String(offset + 1), "TRUE", student.name, "", student.id.uuidString, nickname, "", ""])
+        }
+        let metadata = [
+            ("NOTICE_SENDER_SAFE", "1"), ("class_id", group.id.uuidString),
+            ("session_id", sessionID.uuidString), ("date", "직접입력"),
+            ("preset_id", preset.id.uuidString), ("preset_version", String(preset.version)),
+            ("preset_type", preset.kind.category.rawValue)
+        ]
+        for (index, pair) in metadata.enumerated() {
+            if index == rows.count { rows.append(Array(repeating: "", count: columnCount)) }
+            rows[index][6] = pair.0; rows[index][7] = pair.1
+        }
+        let tsv = rows.map { $0.map(tsvEscape).joined(separator: "\t") }.joined(separator: "\n")
+        let safety = "font-size:1px;color:#fff;width:2px;max-width:2px;padding:0;border:0"
+        let visible = "border:1px solid #111;padding:6px"
+        let htmlRows = rows.enumerated().map { rowIndex, row in
+            "<tr>" + row.enumerated().map { column, value in
+                td(value, style: column >= 4 ? safety : visible + (rowIndex == 0 ? ";font-weight:700;background:#eee" : ""))
+            }.joined() + "</tr>"
+        }.joined()
+        return SheetTemplate(tsv: tsv, html: htmlDocument(htmlRows), sessionID: sessionID)
     }
 
     private static func buildLesson(group: ClassGroup, students: [Student], preset: MessagePreset) -> SheetTemplate {
@@ -43,6 +78,7 @@ enum SheetTemplateBuilder {
             ("NOTICE_SENDER_SAFE", "1"), ("class_id", group.id.uuidString),
             ("session_id", sessionID.uuidString), ("date", "=J1"),
             ("preset_id", preset.id.uuidString), ("preset_version", String(preset.version)),
+            ("preset_type", preset.kind.category.rawValue),
             ("안내", "A:M 전체를 복사해 앱에 붙여넣으세요")
         ]
         let firstStudentRow = 4
@@ -77,7 +113,8 @@ enum SheetTemplateBuilder {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         let mockCount = max(1, min(3, preset.mockExamCount ?? 3))
         let headers = ["번호", "이름", "호칭", "출석", "태도"]
-            + (1...mockCount).flatMap { ["모의고사\($0) 점수", "모의고사\($0) 코멘트"] }
+            + (1...mockCount).map { "모의고사\($0) 점수" }
+            + (1...mockCount).map { "모의고사\($0) 코멘트" }
             + ["공지 멘트", "student_id"]
         let metadataColumn = headers.count
         let columnCount = metadataColumn + 2
@@ -98,10 +135,15 @@ enum SheetTemplateBuilder {
         rows.append(Array(repeating: "", count: columnCount))
         var teacherHeader = Array(repeating: "", count: columnCount); teacherHeader[3] = "선생님 입력"; rows.append(teacherHeader)
         for title in ["진도", "숙제", "시험단원", "공지"] { var row = Array(repeating: "", count: columnCount); row[3] = title; rows.append(row) }
-        let metadata = [("NOTICE_SENDER_SAFE", "1"), ("class_id", group.id.uuidString), ("session_id", sessionID.uuidString), ("date", "=\(columnName(headers.count - 2))1"), ("preset_id", preset.id.uuidString), ("preset_version", String(preset.version))]
+        let metadata = [("NOTICE_SENDER_SAFE", "1"), ("class_id", group.id.uuidString), ("session_id", sessionID.uuidString), ("date", "=\(columnName(headers.count - 2))1"), ("preset_id", preset.id.uuidString), ("preset_version", String(preset.version)), ("preset_type", preset.kind.category.rawValue)]
         for (index, pair) in metadata.enumerated() where rows.indices.contains(index) { rows[index][metadataColumn] = pair.0; rows[index][metadataColumn + 1] = pair.1 }
         let tsv = rows.map { $0.map(tsvEscape).joined(separator: "\t") }.joined(separator: "\n")
-        let htmlRows = rows.map { row in "<tr>" + row.map { td($0, style: "border:1px solid #111;padding:6px") }.joined() + "</tr>" }.joined()
+        let safety = "font-size:1px;color:#fff;width:2px;max-width:2px;padding:0;border:0"
+        let htmlRows = rows.map { row in
+            "<tr>" + row.enumerated().map { column, value in
+                td(value, style: column >= headers.count - 1 ? safety : "border:1px solid #111;padding:6px")
+            }.joined() + "</tr>"
+        }.joined()
         return SheetTemplate(tsv: tsv, html: htmlDocument(htmlRows), sessionID: sessionID)
     }
 
@@ -158,8 +200,8 @@ enum SheetTemplateBuilder {
         let assignment = "$E$\(teacherRow + 2)"
         let notice = "$E$\(teacherRow + 4)"
         func exam(index: Int) -> String {
-            let scoreColumnIndex = 5 + (index - 1) * 2
-            let commentColumnIndex = scoreColumnIndex + 1
+            let scoreColumnIndex = 5 + (index - 1)
+            let commentColumnIndex = 5 + examCount + (index - 1)
             let scoreColumn = columnName(scoreColumnIndex)
             let commentColumn = columnName(commentColumnIndex)
             let score = "\(scoreColumn)\(row)"

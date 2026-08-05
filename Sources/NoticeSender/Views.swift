@@ -824,14 +824,14 @@ struct PresetsView: View {
     @State private var previewDraft = PresetPreviewDraft()
     @State private var showingCreatePreset = false
     @State private var newPresetName = ""
-    @State private var newPresetKind: PresetKind = .regular
+    @State private var newPresetKind: PresetCategory = .regular
     @State private var showingRenamePreset = false
     @State private var renamePresetText = ""
     @State private var showingDeletePreset = false
 
     private var sortedPresets: [MessagePreset] {
         store.database.presets.sorted {
-            ($0.kind.rawValue, $0.name, -$0.version) < ($1.kind.rawValue, $1.name, -$1.version)
+            ($0.kind.category.rawValue, $0.name, -$0.version) < ($1.kind.category.rawValue, $1.name, -$1.version)
         }
     }
 
@@ -865,7 +865,7 @@ struct PresetsView: View {
                     List(sortedPresets, selection: $selectedID) { preset in
                         VStack(alignment: .leading) {
                             Text(preset.name)
-                            Text("\(preset.kind.rawValue) · v\(preset.version)")
+                            Text("\(preset.kind.category.rawValue) · v\(preset.version)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -907,19 +907,20 @@ struct PresetsView: View {
                                 onDraftChanged: updatePreview
                             )
                             .id(draft.id)
-                            TemplateEditor(title: "출석 문구", text: $draft.presentTemplate)
-                            TemplateEditor(title: "동영상 문구", text: $draft.videoTemplate)
+                            TemplateEditor(title: "출석 문구", text: $draft.presentTemplate, variables: TemplateVariableCatalog.descriptors(for: draft))
+                            TemplateEditor(title: "동영상 문구", text: $draft.videoTemplate, variables: TemplateVariableCatalog.descriptors(for: draft))
                             TemplateEditor(
                                 title: "공지문 말미 문구 · 개인정보 포함 가능",
                                 text: Binding(
                                     get: { draft.footerTemplate ?? PresetFooterPolicy.defaultTemplate },
                                     set: { draft.footerTemplate = $0 }
-                                )
+                                ),
+                                variables: TemplateVariableCatalog.descriptors(for: draft)
                             )
                             Text("교사 연락처 등 개인정보를 입력할 수 있습니다. 내보낸 Preset JSON은 암호화되지 않으므로 안전하게 보관하세요.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            PresetPreviewInputView(draft: $previewDraft)
+                            PresetPreviewInputView(draft: $previewDraft, preset: draft)
                             HStack {
                                 Spacer()
                                 Button("현재 Preset 저장") { updateCurrentPreset() }
@@ -955,7 +956,7 @@ struct PresetsView: View {
                 Text("새 Preset 만들기").font(.title2.bold())
                 TextField("Preset 이름", text: $newPresetName)
                 Picker("종류", selection: $newPresetKind) {
-                    ForEach(PresetKind.allCases) { kind in Text(kind.rawValue).tag(kind) }
+                    ForEach(PresetCategory.allCases) { kind in Text(kind.rawValue).tag(kind) }
                 }
                 HStack {
                     Spacer()
@@ -1002,7 +1003,7 @@ struct PresetsView: View {
 
     private func createPreset() {
         do {
-            let id = try store.createPreset(kind: newPresetKind, name: newPresetName)
+            let id = try store.createPreset(category: newPresetKind, name: newPresetName)
             showingCreatePreset = false
             selectedID = id
             store.banner = "새 Preset을 만들었습니다."
@@ -1088,13 +1089,27 @@ struct PresetsView: View {
 struct TemplateEditor: View {
     let title: String
     @Binding var text: String
+    var variables: [TemplateVariableDescriptor]
     var body: some View {
         GroupBox(title) {
-            writingToolsEditor
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 180)
-                .padding(4)
+            VStack(alignment: .leading, spacing: 6) {
+                Menu("변수 추가") {
+                    ForEach(variables, id: \.token) { variable in
+                        Button(variable.label) { append(variable) }
+                            .help(variable.detail)
+                    }
+                }
+                writingToolsEditor
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 180)
+                    .padding(4)
+            }
         }
+    }
+
+    private func append(_ variable: TemplateVariableDescriptor) {
+        if !text.isEmpty, !text.hasSuffix("\n"), !text.hasSuffix(" ") { text += " " }
+        text += "{{\(variable.token)}}"
     }
 
     @ViewBuilder
@@ -1123,6 +1138,7 @@ private struct LessonInputSnapshot: Hashable {
     var rows: [PreparedNoticeRow]
     var homeworkMaximum: String
     var testMaximum: String
+    var mockMaximums: [String]
 }
 
 struct UnifiedLessonSendingView: View {
@@ -1141,6 +1157,7 @@ struct LessonManagementView: View {
     @State private var performanceRows: [PreparedNoticeRow] = []
     @State private var homeworkMaximum = ""
     @State private var testMaximum = ""
+    @State private var mockMaximums = ["100", "100", "100"]
     @State private var selectedPasteRow = 0
     @State private var selectedPasteColumn = 0
     @State private var inputHistory: [LessonInputSnapshot] = []
@@ -1165,17 +1182,22 @@ struct LessonManagementView: View {
         guard group != nil, let preset else { return false }
         let includedRows = PreparedNoticeSelection.includedRows(performanceRows)
         guard !includedRows.isEmpty else { return false }
-        if preset.kind == .direct {
+        if preset.kind.category == .direct {
             return effectiveCommonMessage != nil
                 || PreparedNoticeSelection.directMessagesAreReady(in: performanceRows, allowEmptyMessages: lessonDryRun)
         }
         guard !draft.progress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        if preset.kind.category == .mock {
+            let count = max(1, min(3, preset.mockExamCount ?? 3))
+            return mockMaximums.prefix(count).allSatisfy { (number($0) ?? 0) > 0 }
+        }
         switch preset.kind {
         case .direct: return true
         case .first: return true
-        case .testOnly, .mock: return (number(testMaximum) ?? 0) > 0
+        case .testOnly: return (number(testMaximum) ?? 0) > 0
         case .homeworkOnly: return (number(homeworkMaximum) ?? 0) > 0
         case .regular: return (number(homeworkMaximum) ?? 0) > 0 && (number(testMaximum) ?? 0) > 0
+        case .mock: return true
         }
     }
 
@@ -1185,7 +1207,7 @@ struct LessonManagementView: View {
 
     private var previewRows: [LessonPreviewRow] {
         guard let group, var resolvedPreset = preset else { return [] }
-        if resolvedPreset.kind == .direct {
+        if resolvedPreset.kind.category == .direct {
             return PreparedNoticeSelection.includedRows(performanceRows).compactMap { performance in
                 guard let student = store.student(id: performance.id) else { return nil }
                 let message = DirectNoticeMessage.normalized(performance.noticeMessage)
@@ -1210,9 +1232,27 @@ struct LessonManagementView: View {
             guard let student = store.student(id: performance.id) else { return nil }
             let nickname = performance.nickname
             let examCount = max(1, min(3, resolvedPreset.mockExamCount ?? 3))
-            let exams = resolvedPreset.kind == .mock
+            let exams: [ExamInput] = resolvedPreset.kind.category == .mock
                 ? (1...examCount).map { index in
-                    ExamInput(title: draft.examUnit.isEmpty ? "모의고사 \(index)" : "\(draft.examUnit) \(index)", score: index == 1 ? number(performance.test) : nil, maximum: number(testMaximum) ?? 100, average: nil, highest: nil, rank: nil, attendees: nil, comment: index == 1 ? performance.testComment : "")
+                    let exam = performance.mockExams.indices.contains(index - 1) ? performance.mockExams[index - 1] : PreparedMockExam()
+                    let maximum = mockMaximums.indices.contains(index - 1) ? number(mockMaximums[index - 1]) : 100
+                    let score = number(exam.score)
+                    let cohort = performanceRows.compactMap { row -> Double? in
+                        guard row.mockExams.indices.contains(index - 1), let value = number(row.mockExams[index - 1].score), value > 0 else { return nil }
+                        return value
+                    }
+                    let average = cohort.isEmpty ? nil : cohort.reduce(0, +) / Double(cohort.count)
+                    let rank = score.map { value in 1 + cohort.filter { $0 > value }.count }
+                    return ExamInput(
+                        title: draft.examUnit.isEmpty ? "모의고사 \(index)회차" : "\(draft.examUnit) \(index)회차",
+                        score: score,
+                        maximum: maximum ?? 100,
+                        average: average,
+                        highest: cohort.max(),
+                        rank: rank,
+                        attendees: cohort.count,
+                        comment: exam.comment
+                    )
                 }
                 : []
             let input = LessonInput(
@@ -1235,7 +1275,9 @@ struct LessonManagementView: View {
                 exams: exams
             )
             do {
-                return LessonPreviewRow(studentID: student.id, studentName: student.name, nickname: nickname, chatRoomName: student.chatRoomName, message: try TemplateEngine.render(preset: resolvedPreset, input: input), error: nil)
+                let pastedMessage = performance.noticeMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                let message = pastedMessage.isEmpty ? try TemplateEngine.render(preset: resolvedPreset, input: input) : performance.noticeMessage
+                return LessonPreviewRow(studentID: student.id, studentName: student.name, nickname: nickname, chatRoomName: student.chatRoomName, message: message, error: nil)
             } catch {
                 return LessonPreviewRow(studentID: student.id, studentName: student.name, nickname: nickname, chatRoomName: student.chatRoomName, message: "", error: error.localizedDescription)
             }
@@ -1288,7 +1330,7 @@ struct LessonManagementView: View {
             }
             HStack(spacing: 14) {
                 Picker("반", selection: $draft.classID) { ForEach(store.database.classes) { Text($0.name).tag($0.id) } }.frame(width: 190)
-                Picker("Preset", selection: $draft.presetID) { ForEach(store.database.presets.sorted { $0.updatedAt > $1.updatedAt }) { Text("\($0.name) v\($0.version)").tag($0.id) } }.frame(width: 260)
+                Picker("Preset", selection: $draft.presetID) { ForEach(store.database.presets.sorted { $0.updatedAt > $1.updatedAt }) { Text("[\($0.kind.category.rawValue)] \($0.name) v\($0.version)").tag($0.id) } }.frame(width: 320)
                 DatePicker("날짜", selection: $draft.date, displayedComponents: .date)
                 Spacer()
                 Text(kakao.statusText).font(.caption).foregroundStyle(.secondary)
@@ -1297,9 +1339,9 @@ struct LessonManagementView: View {
             if let summary = kakao.lastRunSummary {
                 KakaoRunSummaryCard(summary: summary, onDismiss: kakao.clearLastRunSummary)
             }
-            if preset?.kind == .direct {
+            if preset?.kind.category == .direct {
                 GroupBox("직접입력 안내") {
-                    Text("아래 학생별 입력표의 ‘공지 멘트’를 각 학생에게 그대로 발송합니다. 문구의 첫 문자와 마지막 문자가 큰따옴표(\")이면 그 한 쌍만 자동으로 제거합니다.")
+                    Text("아래 4열 입력표의 ‘메시지’를 발송에 체크된 각 학생에게 그대로 발송합니다. 문구의 첫 문자와 마지막 문자가 큰따옴표(\")이면 그 한 쌍만 자동으로 제거합니다.")
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(6)
                 }
@@ -1308,7 +1350,7 @@ struct LessonManagementView: View {
                     Text("선생님 수업 입력").font(.headline)
                     LessonTextField(title: "진도", text: lessonTextBinding(\.progress), onBeginEditing: recordUndoSnapshot).frame(height: 82)
                     LessonTextField(title: "숙제", text: lessonTextBinding(\.assignment), onBeginEditing: recordUndoSnapshot).frame(height: 82)
-                    LessonTextField(title: "시험단원", text: lessonTextBinding(\.examUnit), onBeginEditing: recordUndoSnapshot).frame(height: 82)
+                    LessonTextField(title: preset?.kind.category == .mock ? "모의고사명" : "시험단원", text: lessonTextBinding(\.examUnit), onBeginEditing: recordUndoSnapshot).frame(height: 82)
                     LessonTextField(title: "공지", text: lessonTextBinding(\.notice), onBeginEditing: recordUndoSnapshot).frame(height: 82)
                 }.frame(maxWidth: .infinity)
             }
@@ -1347,6 +1389,13 @@ struct LessonManagementView: View {
         }
         .onChange(of: draft.classID) { _, newClassID in
             handleLessonClassChange(newClassID)
+        }
+        .onChange(of: draft.presetID) { oldID, newID in
+            guard oldID != newID else { return }
+            homeworkMaximum = ""
+            testMaximum = ""
+            mockMaximums = ["100", "100", "100"]
+            rebuildPerformanceRows()
         }
         .onChange(of: group?.version) { oldVersion, newVersion in
             guard oldVersion != newVersion else { return }
@@ -1423,7 +1472,7 @@ struct LessonManagementView: View {
                 Spacer()
                 lessonAttachmentStatus
                 if let group, let preset {
-                    Text(preset.kind == .direct ? "\(group.school) · 학생별 공지 멘트 사용" : "\(group.school) → \(store.academyName(for: group.school, fallback: preset.academyName))")
+                    Text(preset.kind.category == .direct ? "\(group.school) · 학생별 메시지 사용" : "\(group.school) → \(store.academyName(for: group.school, fallback: preset.academyName))")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -1526,17 +1575,20 @@ struct LessonManagementView: View {
                 rows: $performanceRows,
                 homeworkMaximum: $homeworkMaximum,
                 testMaximum: $testMaximum,
+                mockMaximums: $mockMaximums,
                 selectedStudentRow: $selectedPasteRow,
                 selectedInputColumn: $selectedPasteColumn,
+                layout: preset?.kind.category ?? .regular,
+                mockExamCount: max(1, min(3, preset?.mockExamCount ?? 3)),
                 onBeforeChange: recordUndoSnapshot,
                 onUndo: undoLastInput,
                 isInteractionEnabled: !kakao.isBusy && !isPreparingSend
             )
             .frame(
-                width: 1331,
+                width: SpreadsheetCanvas.widths(layout: preset?.kind.category ?? .regular, mockExamCount: max(1, min(3, preset?.mockExamCount ?? 3))).reduce(0, +),
                 height: max(
                     SpreadsheetCanvas.headerHeight + SpreadsheetCanvas.rowHeight * 2,
-                    SpreadsheetCanvas.headerHeight + CGFloat(performanceRows.count + 1) * SpreadsheetCanvas.rowHeight
+                    SpreadsheetCanvas.headerHeight + CGFloat(performanceRows.count + ((preset?.kind.category ?? .regular) == .direct ? 0 : 1)) * SpreadsheetCanvas.rowHeight
                 )
             )
         }
@@ -1545,7 +1597,13 @@ struct LessonManagementView: View {
     }
 
     private var selectedPasteDescription: String {
-        let columns = ["출석", "태도", "숙제", "테스트", "숙제 코멘트", "테스트 코멘트", "공지 멘트"]
+        let category = preset?.kind.category ?? .regular
+        let count = max(1, min(3, preset?.mockExamCount ?? 3))
+        let columns: [String] = switch category {
+        case .direct: ["메시지"]
+        case .regular: ["출석", "태도", "숙제", "테스트", "숙제 코멘트", "테스트 코멘트", "공지 멘트"]
+        case .mock: ["출석", "태도"] + (1...count).map { "모의고사 \($0) 점수" } + (1...count).map { "모의고사 \($0) 코멘트" } + ["공지 멘트"]
+        }
         let student = performanceRows.indices.contains(selectedPasteRow) ? performanceRows[selectedPasteRow].name : "-"
         let column = columns.indices.contains(selectedPasteColumn) ? columns[selectedPasteColumn] : "-"
         return "선택 시작: \(student) · \(column)"
@@ -1584,6 +1642,54 @@ struct LessonManagementView: View {
         let source = BatchParser.parseTSV(text)
         guard !source.isEmpty else { store.banner = "클립보드에 붙여넣을 표 범위가 없습니다."; return }
         recordUndoSnapshot()
+        let category = preset?.kind.category ?? .regular
+        if category == .direct,
+           let headerIndex = source.firstIndex(where: { $0.contains("성명") && $0.contains("메시지") }) {
+            let header = source[headerIndex]
+            let nameColumn = header.firstIndex(of: "성명")!
+            let messageColumn = header.firstIndex(of: "메시지")!
+            let sendColumn = header.firstIndex(of: "발송")
+            for row in source.dropFirst(headerIndex + 1) where row.indices.contains(nameColumn) {
+                guard let target = performanceRows.firstIndex(where: { $0.name == row[nameColumn].trimmingCharacters(in: .whitespacesAndNewlines) }) else { continue }
+                if row.indices.contains(messageColumn) { performanceRows[target].noticeMessage = row[messageColumn] }
+                if let sendColumn, row.indices.contains(sendColumn) { performanceRows[target].isIncluded = spreadsheetSendValue(row[sendColumn]) }
+            }
+            store.banner = "직접입력 4열 표를 성명 기준으로 붙여넣었습니다."
+            return
+        }
+        if category == .mock,
+           let headerIndex = source.firstIndex(where: { $0.contains("출석") && $0.contains(where: { $0.contains("모의고사") }) }) {
+            let header = source[headerIndex]
+            let nameColumn = header.firstIndex(where: { $0 == "이름" || $0 == "성명" || $0.contains("성명") })
+            let attendanceColumn = header.firstIndex(of: "출석")
+            let attitudeColumn = header.firstIndex(of: "태도")
+            let noticeColumn = header.firstIndex(where: { $0 == "공지 멘트" || $0 == "메시지" })
+            let examColumns = header.indices.filter { header[$0].contains("모의고사") && !header[$0].contains("코멘트") }
+            let commentColumns = header.indices.filter { header[$0].contains("모의고사") && header[$0].contains("코멘트") }
+            if source.indices.contains(headerIndex + 1) {
+                for (index, column) in examColumns.prefix(3).enumerated() where source[headerIndex + 1].indices.contains(column) {
+                    let value = source[headerIndex + 1][column]
+                    if !value.isEmpty { mockMaximums[index] = value }
+                }
+            }
+            for row in source.dropFirst(headerIndex + 1) {
+                let target: Int?
+                if let nameColumn, row.indices.contains(nameColumn) { target = performanceRows.firstIndex { $0.name == row[nameColumn].trimmingCharacters(in: .whitespacesAndNewlines) } }
+                else { target = nil }
+                guard let target else { continue }
+                if let attendanceColumn, row.indices.contains(attendanceColumn) { performanceRows[target].attendance = row[attendanceColumn] }
+                if let attitudeColumn, row.indices.contains(attitudeColumn) { performanceRows[target].attitude = row[attitudeColumn] }
+                for (index, column) in examColumns.prefix(3).enumerated() where row.indices.contains(column) {
+                    performanceRows[target].mockExams[index].score = row[column]
+                }
+                for (index, column) in commentColumns.prefix(3).enumerated() where row.indices.contains(column) {
+                    performanceRows[target].mockExams[index].comment = row[column]
+                }
+                if let noticeColumn, row.indices.contains(noticeColumn) { performanceRows[target].noticeMessage = row[noticeColumn] }
+            }
+            store.banner = "모의고사 점수·코멘트를 성명 기준으로 붙여넣었습니다."
+            return
+        }
         if let headerIndex = source.firstIndex(where: { $0.contains("출석") && ($0.contains("숙제") || $0.contains(where: { $0.contains("숙제") })) }) {
             let header = source[headerIndex]
             let attendanceColumn = header.firstIndex(of: "출석") ?? 3
@@ -1615,14 +1721,28 @@ struct LessonManagementView: View {
             for (columnOffset, value) in sourceRow.enumerated() {
                 let targetColumn = selectedPasteColumn + columnOffset
                 guard targetColumn < 7 else { break }
-                setPerformanceValue(value, row: targetRow, column: targetColumn)
+                setPerformanceValue(value, row: targetRow, column: targetColumn, category: category)
             }
         }
         store.banner = "선택한 시작 칸부터 \(source.count)행 범위를 붙여넣었습니다."
     }
 
-    private func setPerformanceValue(_ value: String, row: Int, column: Int) {
+    private func setPerformanceValue(_ value: String, row: Int, column: Int, category: PresetCategory = .regular) {
         guard performanceRows.indices.contains(row) else { return }
+        if category == .direct { if column == 0 { performanceRows[row].noticeMessage = value }; return }
+        if category == .mock {
+            if column == 0 { performanceRows[row].attendance = value }
+            else if column == 1 { performanceRows[row].attitude = value }
+            else if column == 2 + max(1, min(3, preset?.mockExamCount ?? 3)) * 2 { performanceRows[row].noticeMessage = value }
+            else if column >= 2 {
+                let count = max(1, min(3, preset?.mockExamCount ?? 3))
+                let index = column < 2 + count ? column - 2 : column - 2 - count
+                guard performanceRows[row].mockExams.indices.contains(index) else { return }
+                if column < 2 + count { performanceRows[row].mockExams[index].score = value }
+                else { performanceRows[row].mockExams[index].comment = value }
+            }
+            return
+        }
         switch column {
         case 0: performanceRows[row].attendance = value
         case 1: performanceRows[row].attitude = value
@@ -1632,6 +1752,10 @@ struct LessonManagementView: View {
         case 5: performanceRows[row].testComment = value
         default: performanceRows[row].noticeMessage = value
         }
+    }
+
+    private func spreadsheetSendValue(_ value: String) -> Bool {
+        ["true", "1", "yes", "y", "☑︎", "☑"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     private func number(_ text: String) -> Double? {
@@ -1646,7 +1770,7 @@ struct LessonManagementView: View {
     }
 
     private func recordUndoSnapshot() {
-        let snapshot = LessonInputSnapshot(draft: draft, rows: performanceRows, homeworkMaximum: homeworkMaximum, testMaximum: testMaximum)
+        let snapshot = LessonInputSnapshot(draft: draft, rows: performanceRows, homeworkMaximum: homeworkMaximum, testMaximum: testMaximum, mockMaximums: mockMaximums)
         guard inputHistory.last != snapshot else { return }
         inputHistory.append(snapshot)
         if inputHistory.count > 100 { inputHistory.removeFirst(inputHistory.count - 100) }
@@ -1658,6 +1782,7 @@ struct LessonManagementView: View {
         performanceRows = snapshot.rows
         homeworkMaximum = snapshot.homeworkMaximum
         testMaximum = snapshot.testMaximum
+        mockMaximums = snapshot.mockMaximums
         store.banner = "마지막 입력 작업을 되돌렸습니다."
     }
 
@@ -1981,6 +2106,12 @@ struct PreparedNoticeRow: Identifiable, Hashable {
     var homeworkComment = ""
     var testComment = ""
     var noticeMessage = ""
+    var mockExams = [PreparedMockExam(), PreparedMockExam(), PreparedMockExam()]
+}
+
+struct PreparedMockExam: Hashable {
+    var score = ""
+    var comment = ""
 }
 
 enum PreparedNoticeSelection {

@@ -90,7 +90,7 @@ enum BatchParser {
     private static func parseSafe(rows: [[String]], database: AppDatabase) -> ParsedBatchResult {
         var issues: [ValidationIssue] = []
         var metadataMap: [String: String] = [:]
-        let metadataKeys: Set<String> = ["NOTICE_SENDER_SAFE", "class_id", "session_id", "date", "preset_id", "preset_version"]
+        let metadataKeys: Set<String> = ["NOTICE_SENDER_SAFE", "class_id", "session_id", "date", "preset_id", "preset_version", "preset_type"]
         for row in rows {
             for index in row.indices.dropLast() where metadataKeys.contains(row[index]) {
                 metadataMap[row[index]] = row[index + 1]
@@ -103,16 +103,22 @@ enum BatchParser {
               let schemaVersion = Int(metadataMap["NOTICE_SENDER_SAFE"] ?? "") else {
             return ParsedBatchResult(batch: nil, issues: [ValidationIssue(severity: .error, message: "안전 형식 메타데이터가 잘못되었습니다.")])
         }
-        guard let headerIndex = rows.firstIndex(where: { $0.contains("student_id") && ($0.contains("notice_message") || $0.contains("공지 멘트")) }) else {
+        if let type = metadataMap["preset_type"],
+           let localPreset = database.presets.first(where: { $0.id == presetID }),
+           type != localPreset.kind.category.rawValue {
+            issues.append(ValidationIssue(severity: .error, message: "Sheet 종류와 Preset 종류가 다릅니다."))
+        }
+        guard let headerIndex = rows.firstIndex(where: { $0.contains("student_id") && ($0.contains("notice_message") || $0.contains("공지 멘트") || $0.contains("메시지")) }) else {
             return ParsedBatchResult(batch: nil, issues: [ValidationIssue(severity: .error, message: "student_id/notice_message 헤더를 찾을 수 없습니다.")])
         }
         let headers = rows[headerIndex]
         guard let idColumn = headers.firstIndex(of: "student_id"),
-              let nameColumn = headers.firstIndex(where: { ["student_name", "이름"].contains($0) }),
-              let nicknameColumn = headers.firstIndex(where: { ["nickname", "호칭"].contains($0) }),
-              let messageColumn = headers.firstIndex(where: { ["notice_message", "공지 멘트"].contains($0) }) else {
+              let nameColumn = headers.firstIndex(where: { ["student_name", "이름", "성명"].contains($0) }),
+              let messageColumn = headers.firstIndex(where: { ["notice_message", "공지 멘트", "메시지"].contains($0) }) else {
             return ParsedBatchResult(batch: nil, issues: [ValidationIssue(severity: .error, message: "필수 열이 없습니다.")])
         }
+        let nicknameColumn = headers.firstIndex(where: { ["nickname", "호칭"].contains($0) })
+        let sendColumn = headers.firstIndex(where: { ["send", "발송"].contains($0) })
         let attendanceColumn = headers.firstIndex(where: { ["attendance", "출석"].contains($0) })
         var items: [BatchItem] = []
         var foundStudentRow = false
@@ -125,8 +131,8 @@ enum BatchParser {
                 issues.append(ValidationIssue(severity: .error, row: offset + 1, message: "학생 UUID 형식이 잘못되었습니다.")); continue
             }
             foundStudentRow = true
+            if let sendColumn, !isSendEnabled(value(row, sendColumn)) { continue }
             let name = value(row, nameColumn)
-            let nickname = value(row, nicknameColumn)
             let message = value(row, messageColumn)
             if let attendanceColumn,
                LessonAttendanceMode(normalized: value(row, attendanceColumn)) == nil {
@@ -139,6 +145,7 @@ enum BatchParser {
             guard let student = database.students.first(where: { $0.id == id }) else {
                 issues.append(ValidationIssue(severity: .error, row: offset + 1, message: "로컬 DB에 없는 학생 UUID입니다.")); continue
             }
+            let nickname = nicknameColumn.map { value(row, $0) }.flatMap(\.nilIfEmpty) ?? student.nickname
             items.append(BatchItem(studentID: id, studentName: name, nickname: nickname, chatRoomName: student.chatRoomName, message: message, chatID: student.chatID))
         }
         let metadata = BatchMetadata(schemaVersion: schemaVersion, classID: classID, sessionID: sessionID, date: metadataMap["date"] ?? "", presetID: presetID, presetVersion: presetVersion)
@@ -216,6 +223,10 @@ enum BatchParser {
     }
 
     private static func value(_ row: [String], _ index: Int) -> String { row.indices.contains(index) ? row[index] : "" }
+    private static func isSendEnabled(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !["", "false", "0", "no", "n", "☐", "✗", "x"].contains(normalized)
+    }
     private static func containsFormulaError(_ text: String) -> Bool {
         ["#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#N/A"].contains { text.contains($0) }
     }

@@ -4,6 +4,7 @@ enum TemplateValidationError: LocalizedError {
     case invalidThresholds
     case emptyTemplate(String)
     case unknownToken(String)
+    case unavailableToken(String, PresetCategory)
     case malformedPlaceholder(String)
     case unsupportedAttendance(String)
 
@@ -12,6 +13,7 @@ enum TemplateValidationError: LocalizedError {
         case .invalidThresholds: "별점 기준은 0~1 사이이며 중간 기준이 높은 기준보다 작아야 합니다."
         case .emptyTemplate(let name): "\(name) 문구가 비어 있습니다."
         case .unknownToken(let token): "지원하지 않는 변수입니다: {{\(token)}}"
+        case .unavailableToken(let token, let category): "\(category.rawValue) Preset에서 사용할 수 없는 변수입니다: {{\(token)}}"
         case .malformedPlaceholder(let name): "\(name) 문구에 닫히지 않았거나 잘못된 변수 표시가 있습니다."
         case .unsupportedAttendance(let value): "출결은 출석 또는 동영상만 사용할 수 있습니다: \(value)"
         }
@@ -19,13 +21,11 @@ enum TemplateValidationError: LocalizedError {
 }
 
 enum TemplateEngine {
-    static let supportedTokens: Set<String> = [
-        "academy", "teacher", "student_name", "nickname", "date", "attendance",
-        "attitude_stars", "attitude_comment", "homework_stars", "test_stars",
-        "homework_score", "homework_max", "homework_percent", "test_score", "test_max", "test_percent",
-        "homework_comment", "test_comment", "homework_comment_line", "test_comment_line",
-        "progress", "assignment", "exam_unit", "notice", "exam_sections", "exam_summary_sections"
-    ]
+    static let supportedTokens = Set(TemplateVariableCatalog.all.map(\.token))
+
+    static func supportedTokens(for category: PresetCategory) -> Set<String> {
+        Set(TemplateVariableCatalog.descriptors(for: category).map(\.token))
+    }
 
     static func validate(_ preset: MessagePreset) throws {
         guard preset.middleThreshold >= 0, preset.highThreshold <= 1, preset.middleThreshold < preset.highThreshold else {
@@ -39,6 +39,9 @@ enum TemplateEngine {
             for token in tokens(in: template) where !supportedTokens.contains(token) {
                 throw TemplateValidationError.unknownToken(token)
             }
+            for token in tokens(in: template) where !supportedTokens(for: preset.kind.category).contains(token) {
+                throw TemplateValidationError.unavailableToken(token, preset.kind.category)
+            }
         }
         let footer = preset.effectiveFooterTemplate
         if !footer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -47,6 +50,9 @@ enum TemplateEngine {
             }
             for token in tokens(in: footer) where !supportedTokens.contains(token) {
                 throw TemplateValidationError.unknownToken(token)
+            }
+            for token in tokens(in: footer) where !supportedTokens(for: preset.kind.category).contains(token) {
+                throw TemplateValidationError.unavailableToken(token, preset.kind.category)
             }
         }
     }
@@ -68,7 +74,7 @@ enum TemplateEngine {
         default: attitudeComment = "수업 시간에 집중이 흐트러진 모습이 있었습니다."
         }
 
-        let values: [String: String] = [
+        var values: [String: String] = [
             "academy": preset.academyName,
             "teacher": preset.teacherName,
             "student_name": input.studentName,
@@ -92,10 +98,25 @@ enum TemplateEngine {
             "progress": input.progress,
             "assignment": input.assignment,
             "exam_unit": input.examUnit,
+            "mock_exam_name": input.examUnit,
             "notice": input.notice,
             "exam_sections": examSections(Array(input.exams.prefix(max(1, min(3, preset.mockExamCount ?? 3)))), includeStudent: true),
             "exam_summary_sections": examSections(Array(input.exams.prefix(max(1, min(3, preset.mockExamCount ?? 3)))), includeStudent: false)
         ]
+        for index in 1...3 {
+            let exam = input.exams.indices.contains(index - 1) ? input.exams[index - 1] : ExamInput(title: "", score: nil, maximum: nil, average: nil, highest: nil, rank: nil, attendees: nil)
+            let prefix = "mock\(index)"
+            values["\(prefix)_title"] = exam.title
+            values["\(prefix)_score"] = number(exam.score)
+            values["\(prefix)_max"] = number(exam.maximum)
+            values["\(prefix)_percent"] = percent(score: exam.score, maximum: exam.maximum, missing: "")
+            values["\(prefix)_average"] = number(exam.average)
+            values["\(prefix)_highest"] = number(exam.highest)
+            values["\(prefix)_rank"] = exam.rank.map(String.init) ?? ""
+            values["\(prefix)_attendees"] = exam.attendees.map(String.init) ?? ""
+            values["\(prefix)_comment"] = exam.comment
+            values["\(prefix)_comment_line"] = commentLine(exam.comment)
+        }
         func renderTokens(in source: String) -> String {
             values.reduce(source) { rendered, entry in
                 rendered.replacingOccurrences(of: "{{\(entry.key)}}", with: entry.value)

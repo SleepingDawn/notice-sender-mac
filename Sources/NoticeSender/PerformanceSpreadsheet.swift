@@ -5,28 +5,50 @@ struct PerformanceSpreadsheet: NSViewRepresentable {
     @Binding var rows: [PreparedNoticeRow]
     @Binding var homeworkMaximum: String
     @Binding var testMaximum: String
+    @Binding var mockMaximums: [String]
     @Binding var selectedStudentRow: Int
     @Binding var selectedInputColumn: Int
+    var layout: PresetCategory
+    var mockExamCount: Int
     var onBeforeChange: () -> Void
     var onUndo: () -> Void
     var isInteractionEnabled = true
 
-    nonisolated static func applying(_ changes: [SpreadsheetCanvas.CellChange], to rows: [PreparedNoticeRow], homeworkMaximum: String, testMaximum: String) -> (rows: [PreparedNoticeRow], homeworkMaximum: String, testMaximum: String) {
+    nonisolated static func applying(_ changes: [SpreadsheetCanvas.CellChange], to rows: [PreparedNoticeRow], homeworkMaximum: String, testMaximum: String, mockMaximums: [String] = ["100", "100", "100"], layout: PresetCategory = .regular, mockExamCount: Int = 3) -> (rows: [PreparedNoticeRow], homeworkMaximum: String, testMaximum: String, mockMaximums: [String]) {
         var updatedRows = rows
         var updatedHomeworkMaximum = homeworkMaximum
         var updatedTestMaximum = testMaximum
+        var updatedMockMaximums = mockMaximums
         for change in changes {
             if change.row == 1 {
-                if change.column == 6 { updatedHomeworkMaximum = change.value }
-                if change.column == 7 { updatedTestMaximum = change.value }
+                if layout == .regular {
+                    if change.column == 6 { updatedHomeworkMaximum = change.value }
+                    if change.column == 7 { updatedTestMaximum = change.value }
+                } else if layout == .mock, change.column >= 6, change.column < 6 + max(1, min(3, mockExamCount)) {
+                    let examIndex = change.column - 6
+                    while updatedMockMaximums.count <= examIndex { updatedMockMaximums.append("100") }
+                    updatedMockMaximums[examIndex] = change.value
+                }
                 continue
             }
-            let studentIndex = change.row - 2
+            let studentIndex = change.row - (layout == .direct ? 1 : 2)
             guard updatedRows.indices.contains(studentIndex) else { continue }
+            if layout == .direct {
+                if change.column == 1 { updatedRows[studentIndex].isIncluded = Self.checkboxValue(change.value) }
+                if change.column == 3 { updatedRows[studentIndex].noticeMessage = change.value }
+                continue
+            }
             switch change.column {
-            case 1: updatedRows[studentIndex].isIncluded = ["true", "1", "yes", "y", "☑︎", "☑"].contains(change.value.lowercased())
+            case 1: updatedRows[studentIndex].isIncluded = Self.checkboxValue(change.value)
             case 4: updatedRows[studentIndex].attendance = change.value
             case 5: updatedRows[studentIndex].attitude = change.value
+            case 6...(6 + max(1, min(3, mockExamCount)) * 2) where layout == .mock:
+                if change.column == 6 + max(1, min(3, mockExamCount)) * 2 { updatedRows[studentIndex].noticeMessage = change.value; break }
+                let count = max(1, min(3, mockExamCount))
+                let examIndex = change.column < 6 + count ? change.column - 6 : change.column - 6 - count
+                while updatedRows[studentIndex].mockExams.count <= examIndex { updatedRows[studentIndex].mockExams.append(PreparedMockExam()) }
+                if change.column < 6 + count { updatedRows[studentIndex].mockExams[examIndex].score = change.value }
+                else { updatedRows[studentIndex].mockExams[examIndex].comment = change.value }
             case 6: updatedRows[studentIndex].homework = change.value
             case 7: updatedRows[studentIndex].test = change.value
             case 8: updatedRows[studentIndex].homeworkComment = change.value
@@ -35,7 +57,11 @@ struct PerformanceSpreadsheet: NSViewRepresentable {
             default: break
             }
         }
-        return (updatedRows, updatedHomeworkMaximum, updatedTestMaximum)
+        return (updatedRows, updatedHomeworkMaximum, updatedTestMaximum, updatedMockMaximums)
+    }
+
+    private nonisolated static func checkboxValue(_ value: String) -> Bool {
+        ["true", "1", "yes", "y", "☑︎", "☑"].contains(value.lowercased())
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -47,7 +73,7 @@ struct PerformanceSpreadsheet: NSViewRepresentable {
         view.onUndo = onUndo
         view.isInteractionEnabled = isInteractionEnabled
         view.onSelectionChange = { cell in context.coordinator.updateSelection(cell) }
-        view.update(rows: rows, homeworkMaximum: homeworkMaximum, testMaximum: testMaximum)
+        view.update(rows: rows, homeworkMaximum: homeworkMaximum, testMaximum: testMaximum, mockMaximums: mockMaximums, layout: layout, mockExamCount: mockExamCount)
         return view
     }
 
@@ -57,7 +83,7 @@ struct PerformanceSpreadsheet: NSViewRepresentable {
         view.onUndo = onUndo
         view.isInteractionEnabled = isInteractionEnabled
         view.onSelectionChange = { cell in context.coordinator.updateSelection(cell) }
-        view.update(rows: rows, homeworkMaximum: homeworkMaximum, testMaximum: testMaximum)
+        view.update(rows: rows, homeworkMaximum: homeworkMaximum, testMaximum: testMaximum, mockMaximums: mockMaximums, layout: layout, mockExamCount: mockExamCount)
     }
 
     @MainActor final class Coordinator {
@@ -66,16 +92,19 @@ struct PerformanceSpreadsheet: NSViewRepresentable {
 
         func apply(_ changes: [SpreadsheetCanvas.CellChange]) {
             guard !changes.isEmpty else { return }
-            let result = PerformanceSpreadsheet.applying(changes, to: parent.rows, homeworkMaximum: parent.homeworkMaximum, testMaximum: parent.testMaximum)
+            let result = PerformanceSpreadsheet.applying(changes, to: parent.rows, homeworkMaximum: parent.homeworkMaximum, testMaximum: parent.testMaximum, mockMaximums: parent.mockMaximums, layout: parent.layout, mockExamCount: parent.mockExamCount)
             parent.rows = result.rows
             parent.homeworkMaximum = result.homeworkMaximum
             parent.testMaximum = result.testMaximum
+            parent.mockMaximums = result.mockMaximums
         }
 
         func updateSelection(_ cell: SpreadsheetCanvas.Cell) {
-            guard cell.row >= 2, cell.column >= 4 else { return }
-            parent.selectedStudentRow = cell.row - 2
-            parent.selectedInputColumn = cell.column - 4
+            let firstRow = parent.layout == .direct ? 1 : 2
+            let firstColumn = parent.layout == .direct ? 3 : 4
+            guard cell.row >= firstRow, cell.column >= firstColumn else { return }
+            parent.selectedStudentRow = cell.row - firstRow
+            parent.selectedInputColumn = cell.column - firstColumn
         }
     }
 }
@@ -89,11 +118,24 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
     static let headerHeight: CGFloat = max(40, textHeight + 16)
     static let rowHeight: CGFloat = max(40, textHeight + 16)
 
-    private let widths: [CGFloat] = [45, 56, 90, 90, 90, 70, 85, 85, 180, 180, 360]
-    private let headers = ["번호", "발송", "성명", "호칭", "출석", "태도", "숙제", "테스트", "숙제 코멘트", "테스트 코멘트", "공지 멘트"]
+    private var layout: PresetCategory = .regular
+    private var mockExamCount = 3
+    private var widths: [CGFloat] { Self.widths(layout: layout, mockExamCount: mockExamCount) }
+    private var headers: [String] {
+        switch layout {
+        case .direct: ["번호", "발송", "성명", "메시지"]
+        case .regular: ["번호", "발송", "성명", "호칭", "출석", "태도", "숙제", "테스트", "숙제 코멘트", "테스트 코멘트", "공지 멘트"]
+        case .mock:
+            ["번호", "발송", "성명", "호칭", "출석", "태도"]
+                + (1...mockExamCount).map { "모의고사 \($0) 점수" }
+                + (1...mockExamCount).map { "모의고사 \($0) 코멘트" }
+                + ["공지 멘트"]
+        }
+    }
     private var rows: [PreparedNoticeRow] = []
     private var homeworkMaximum = ""
     private var testMaximum = ""
+    private var mockMaximums = ["100", "100", "100"]
     private var anchor = Cell(row: 2, column: 4)
     private var cursor = Cell(row: 2, column: 4)
     private var editor: SpreadsheetTextView?
@@ -111,24 +153,40 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
     override var intrinsicContentSize: NSSize {
-        NSSize(width: widths.reduce(0, +), height: Self.headerHeight + CGFloat(rows.count + 1) * Self.rowHeight)
+        NSSize(width: widths.reduce(0, +), height: Self.headerHeight + CGFloat(rows.count + (layout == .direct ? 0 : 1)) * Self.rowHeight)
     }
 
-    func update(rows: [PreparedNoticeRow], homeworkMaximum: String, testMaximum: String) {
+    static func widths(layout: PresetCategory, mockExamCount: Int) -> [CGFloat] {
+        switch layout {
+        case .direct: [45, 56, 110, 520]
+        case .regular: [45, 56, 90, 90, 90, 70, 85, 85, 180, 180, 360]
+        case .mock: [45, 56, 90, 90, 90, 70] + Array(repeating: CGFloat(105), count: max(1, min(3, mockExamCount))) + Array(repeating: CGFloat(180), count: max(1, min(3, mockExamCount))) + [320]
+        }
+    }
+
+    func update(rows: [PreparedNoticeRow], homeworkMaximum: String, testMaximum: String, mockMaximums: [String], layout: PresetCategory, mockExamCount: Int) {
+        let layoutChanged = self.layout != layout
         self.rows = rows; self.homeworkMaximum = homeworkMaximum; self.testMaximum = testMaximum
+        self.mockMaximums = mockMaximums; self.layout = layout; self.mockExamCount = max(1, min(3, mockExamCount))
+        if layoutChanged {
+            anchor = Cell(row: firstStudentRow, column: layout == .direct ? 3 : 4)
+            cursor = anchor
+        } else {
+            anchor = normalized(anchor); cursor = normalized(cursor)
+        }
         invalidateIntrinsicContentSize(); needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         NSColor.textBackgroundColor.setFill(); dirtyRect.fill()
-        for row in 0..<(rows.count + 2) {
+        for row in 0..<(rows.count + (layout == .direct ? 1 : 2)) {
             for column in widths.indices {
                 let rect = cellRect(row: row, column: column)
                 if selected(row: row, column: column) { NSColor.controlAccentColor.withAlphaComponent(0.14).setFill(); rect.fill() }
                 fillForCell(row: row, column: column)?.setFill(); if let _ = fillForCell(row: row, column: column) { rect.fill() }
                 NSColor.separatorColor.setStroke(); NSBezierPath(rect: rect).stroke()
-                drawText(value(row: row, column: column), in: rect, bold: row == 0 || row == 1, centered: column < 8)
+                drawText(value(row: row, column: column), in: rect, bold: row == 0 || (row == 1 && layout != .direct), centered: column < (layout == .direct ? 3 : 8))
             }
         }
         NSColor.controlAccentColor.setStroke()
@@ -211,7 +269,7 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
     private func cutSelection() { copySelection(); deleteSelection() }
 
     private func deleteSelection() {
-        let changes = Self.deletionChanges(anchor: anchor, cursor: cursor, studentCount: rows.count) { [weak self] row, column in
+        let changes = Self.deletionChanges(anchor: anchor, cursor: cursor, studentCount: rows.count, layout: layout, mockExamCount: mockExamCount) { [weak self] row, column in
             self?.value(row: row, column: column) ?? ""
         }
         guard !changes.isEmpty else { NSSound.beep(); return }
@@ -231,7 +289,7 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
         }
         guard !changes.isEmpty else { NSSound.beep(); return }
         onBeforeChange?(); onApply?(changes)
-        cursor = Cell(row: min(rows.count + 1, start.row + source.count - 1), column: min(widths.count - 1, start.column + (source.map(\.count).max() ?? 1) - 1))
+        cursor = Cell(row: min(lastRow, start.row + source.count - 1), column: min(widths.count - 1, start.column + (source.map(\.count).max() ?? 1) - 1))
         needsDisplay = true
     }
 
@@ -297,29 +355,39 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
         needsDisplay = true
     }
     private func moveCursor(dx: Int, dy: Int) {
-        cursor = Cell(row: min(max(0, cursor.row + dy), rows.count + 1), column: min(max(0, cursor.column + dx), widths.count - 1)); anchor = cursor; needsDisplay = true; notifySelection()
+        cursor = Cell(row: min(max(0, cursor.row + dy), lastRow), column: min(max(0, cursor.column + dx), widths.count - 1)); anchor = cursor; needsDisplay = true; notifySelection()
     }
     private func notifySelection() {
         let topLeft = Cell(row: min(anchor.row, cursor.row), column: min(anchor.column, cursor.column))
         onSelectionChange?(topLeft)
     }
     private func isSendCheckbox(_ cell: Cell) -> Bool {
-        cell.column == 1 && cell.row >= 2 && cell.row < rows.count + 2
+        cell.column == 1 && cell.row >= firstStudentRow && cell.row <= lastRow
     }
     private func toggleSendCheckbox(_ cell: Cell) {
-        guard isSendCheckbox(cell), rows.indices.contains(cell.row - 2) else { return }
+        let studentIndex = cell.row - firstStudentRow
+        guard isSendCheckbox(cell), rows.indices.contains(studentIndex) else { return }
         onBeforeChange?()
-        onApply?([CellChange(row: cell.row, column: cell.column, value: rows[cell.row - 2].isIncluded ? "false" : "true")])
+        onApply?([CellChange(row: cell.row, column: cell.column, value: rows[studentIndex].isIncluded ? "false" : "true")])
         needsDisplay = true
     }
-    private func editable(_ cell: Cell) -> Bool { (cell.row == 1 && [6, 7].contains(cell.column)) || (cell.row >= 2 && cell.row < rows.count + 2 && cell.column >= 4) }
-    nonisolated static func deletionChanges(anchor: Cell, cursor: Cell, studentCount: Int, value: (Int, Int) -> String) -> [CellChange] {
+    private func editable(_ cell: Cell) -> Bool {
+        if layout == .direct { return cell.row >= firstStudentRow && cell.row <= lastRow && cell.column == 3 }
+        let totalEditable = cell.row == 1 && (layout == .regular ? [6, 7].contains(cell.column) : (cell.column >= 6 && cell.column < 6 + mockExamCount))
+        return totalEditable || (cell.row >= firstStudentRow && cell.row <= lastRow && cell.column >= 4)
+    }
+    nonisolated static func deletionChanges(anchor: Cell, cursor: Cell, studentCount: Int, layout: PresetCategory = .regular, mockExamCount: Int = 3, value: (Int, Int) -> String) -> [CellChange] {
         let rowRange = min(anchor.row, cursor.row)...max(anchor.row, cursor.row)
         let columnRange = min(anchor.column, cursor.column)...max(anchor.column, cursor.column)
         var changes: [CellChange] = []
+        let firstStudentRow = layout == .direct ? 1 : 2
+        let lastColumn = layout == .direct ? 3 : (layout == .regular ? 10 : 6 + max(1, min(3, mockExamCount)) * 2)
         for row in rowRange {
             for column in columnRange {
-                let isEditable = (row == 1 && [6, 7].contains(column)) || (row >= 2 && row < studentCount + 2 && column >= 4 && column <= 10)
+                let directEditable = layout == .direct && row >= 1 && row < studentCount + 1 && column == 3
+                let totalEditable = layout != .direct && row == 1 && (layout == .regular ? [6, 7].contains(column) : (column >= 6 && column < 6 + max(1, min(3, mockExamCount))))
+                let studentEditable = layout != .direct && row >= firstStudentRow && row < studentCount + firstStudentRow && column >= 4 && column <= lastColumn
+                let isEditable = directEditable || totalEditable || studentEditable
                 if isEditable, !value(row, column).isEmpty { changes.append(CellChange(row: row, column: column, value: "")) }
             }
         }
@@ -336,7 +404,7 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
     }
     private func cell(at point: NSPoint) -> Cell? {
         let row = point.y < Self.headerHeight ? 0 : Int((point.y - Self.headerHeight) / Self.rowHeight) + 1
-        guard row <= rows.count + 1 else { return nil }
+        guard row <= lastRow else { return nil }
         var x: CGFloat = 0
         for (column, width) in widths.enumerated() { if point.x >= x && point.x < x + width { return Cell(row: row, column: column) }; x += width }
         return nil
@@ -351,15 +419,31 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
     }
     private func value(row: Int, column: Int) -> String {
         if row == 0 { return headers[column] }
-        if row == 1 { if column == 2 { return "총 개수" }; if column == 6 { return homeworkMaximum }; if column == 7 { return testMaximum }; return "" }
-        guard rows.indices.contains(row - 2) else { return "" }; let item = rows[row - 2]
+        if row == 1 && layout != .direct {
+            if column == 2 { return layout == .mock ? "만점" : "총 개수" }
+            if layout == .regular {
+                if column == 6 { return homeworkMaximum }
+                if column == 7 { return testMaximum }
+            } else if column >= 6, column < 6 + mockExamCount {
+                let index = column - 6
+                return mockMaximums.indices.contains(index) ? mockMaximums[index] : "100"
+            }
+            return ""
+        }
+        guard rows.indices.contains(row - firstStudentRow) else { return "" }; let item = rows[row - firstStudentRow]
         switch column {
         case 0: return String(item.number)
         case 1: return item.isIncluded ? "☑︎" : "☐"
         case 2: return item.name
+        case 3 where layout == .direct: return item.noticeMessage
         case 3: return item.nickname
         case 4: return item.attendance
         case 5: return item.attitude
+        case 6...(headers.count - 1) where layout == .mock:
+            if column == headers.count - 1 { return item.noticeMessage }
+            let examIndex = column < 6 + mockExamCount ? column - 6 : column - 6 - mockExamCount
+            guard item.mockExams.indices.contains(examIndex) else { return "" }
+            return column < 6 + mockExamCount ? item.mockExams[examIndex].score : item.mockExams[examIndex].comment
         case 6: return item.homework
         case 7: return item.test
         case 8: return item.homeworkComment
@@ -369,9 +453,19 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
     }
     private func fillForCell(row: Int, column: Int) -> NSColor? {
         guard row <= 1 else { return nil }
-        if row == 1 && column == 6 { return .systemBlue.withAlphaComponent(0.12) }
-        if row == 1 && column == 7 { return .systemPink.withAlphaComponent(0.12) }
+        if layout == .direct { return [.windowBackgroundColor, .systemGreen.withAlphaComponent(0.14), .lightGray, .systemYellow.withAlphaComponent(0.22)][column] }
+        if row == 1, column >= 6 { return column < 6 + mockExamCount ? .systemBlue.withAlphaComponent(0.12) : .windowBackgroundColor }
+        if layout == .mock {
+            if column < 6 { return [.windowBackgroundColor, .systemGreen.withAlphaComponent(0.14), .lightGray, .lightGray, .systemYellow.withAlphaComponent(0.2), .systemRed.withAlphaComponent(0.15)][column] }
+            return column == headers.count - 1 ? .systemYellow.withAlphaComponent(0.22) : (column < 6 + mockExamCount ? .systemBlue.withAlphaComponent(0.15) : .systemPurple.withAlphaComponent(0.12))
+        }
         return [.windowBackgroundColor, .systemGreen.withAlphaComponent(0.14), .lightGray, .lightGray, .systemYellow.withAlphaComponent(0.2), .systemRed.withAlphaComponent(0.15), .systemBlue.withAlphaComponent(0.15), .systemPink.withAlphaComponent(0.15), .systemPurple.withAlphaComponent(0.12), .systemPurple.withAlphaComponent(0.12), .systemYellow.withAlphaComponent(0.22)][column]
+    }
+
+    private var firstStudentRow: Int { layout == .direct ? 1 : 2 }
+    private var lastRow: Int { firstStudentRow + rows.count - 1 }
+    private func normalized(_ cell: Cell) -> Cell {
+        Cell(row: min(max(0, cell.row), max(0, lastRow)), column: min(max(0, cell.column), max(0, widths.count - 1)))
     }
     private func drawText(_ text: String, in rect: NSRect, bold: Bool, centered: Bool) {
         let paragraph = NSMutableParagraphStyle(); paragraph.alignment = centered ? .center : .left; paragraph.lineBreakMode = .byTruncatingTail

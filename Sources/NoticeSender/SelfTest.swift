@@ -10,6 +10,12 @@ enum SelfTest {
                 && DefaultPresets.direct.name == "직접입력"
                 && DefaultPresets.direct.presentTemplate == "{{notice}}"
         }
+        check("Preset 사용자 노출 종류 3개", failures: &failures) {
+            PresetCategory.allCases.map(\.rawValue) == ["일반 수업", "모의고사", "직접입력"]
+                && PresetKind.first.category == .regular
+                && PresetKind.testOnly.category == .regular
+                && PresetKind.homeworkOnly.category == .regular
+        }
         check("직접입력 바깥 큰따옴표 한 쌍 제거", failures: &failures) {
             DirectNoticeMessage.normalized("\"첫 줄\n둘째 줄\"") == "첫 줄\n둘째 줄"
                 && DirectNoticeMessage.normalized("\"앞만") == "\"앞만"
@@ -472,6 +478,41 @@ enum SelfTest {
             let tsv = SheetTemplateBuilder.build(group: group, students: [student], preset: preset).tsv
             return tsv.contains("모의고사1 점수") && !tsv.contains("모의고사2 점수")
         }
+        check("모의고사 3회 점수·코멘트 독립 입력", failures: &failures) {
+            let row = PreparedNoticeRow(id: UUID(), number: 1, name: "김길동", nickname: "길동이")
+            let changes = [
+                SpreadsheetCanvas.CellChange(row: 1, column: 6, value: "104"),
+                SpreadsheetCanvas.CellChange(row: 1, column: 7, value: "100"),
+                SpreadsheetCanvas.CellChange(row: 1, column: 8, value: "90"),
+                SpreadsheetCanvas.CellChange(row: 2, column: 6, value: "91"),
+                SpreadsheetCanvas.CellChange(row: 2, column: 7, value: "88"),
+                SpreadsheetCanvas.CellChange(row: 2, column: 8, value: "79"),
+                SpreadsheetCanvas.CellChange(row: 2, column: 9, value: "1회 코멘트"),
+                SpreadsheetCanvas.CellChange(row: 2, column: 10, value: "2회 코멘트"),
+                SpreadsheetCanvas.CellChange(row: 2, column: 11, value: "3회 코멘트"),
+                SpreadsheetCanvas.CellChange(row: 2, column: 12, value: "개별 공지")
+            ]
+            let result = PerformanceSpreadsheet.applying(changes, to: [row], homeworkMaximum: "", testMaximum: "", layout: .mock, mockExamCount: 3)
+            return result.mockMaximums == ["104", "100", "90"]
+                && result.rows[0].mockExams.map(\.score) == ["91", "88", "79"]
+                && result.rows[0].mockExams.map(\.comment) == ["1회 코멘트", "2회 코멘트", "3회 코멘트"]
+                && result.rows[0].noticeMessage == "개별 공지"
+        }
+        check("직접입력 4열 양식·발송 체크 파싱", failures: &failures) {
+            let first = Student(name: "김길동", nickname: "길동이", school: "한성", admissionYear: 26, chatRoomName: "길동방")
+            let second = Student(name: "박하연", nickname: "하연이", school: "한성", admissionYear: 26, chatRoomName: "하연방")
+            let group = ClassGroup(name: "한성26", school: "한성", admissionYear: 26, members: [ClassMember(studentID: first.id), ClassMember(studentID: second.id)])
+            var rows = BatchParser.parseTSV(SheetTemplateBuilder.build(group: group, students: [first, second], preset: DefaultPresets.direct).tsv)
+            guard Array(rows[0].prefix(4)) == ["번호", "발송", "성명", "메시지"] else { return false }
+            rows[1][3] = "길동 메시지"
+            rows[2][1] = "FALSE"
+            rows[2][3] = "하연 메시지"
+            let text = rows.map { $0.joined(separator: "\t") }.joined(separator: "\n")
+            let result = BatchParser.parse(text: text, database: AppDatabase(students: [first, second], classes: [group], presets: [DefaultPresets.direct]), selectedClassID: nil)
+            return result.batch?.items.map(\.studentID) == [first.id]
+                && result.batch?.items.first?.message == "길동 메시지"
+                && result.issues.allSatisfy { $0.severity != .error }
+        }
         check("Google Sheets 공식의 선생님 입력행 참조", failures: &failures) {
             let student = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "테스트방")
             let group = ClassGroup(name: "한성25", school: "한성", admissionYear: 25, members: [ClassMember(studentID: student.id)])
@@ -620,6 +661,41 @@ enum SelfTest {
                 && input.homeworkComment == "사용자 숙제 코멘트"
                 && input.testComment == "사용자 테스트 코멘트"
         }
+        check("모의고사 interactive 미리보기 3회분 변수", failures: &failures) {
+            var previewDraft = PresetPreviewDraft()
+            previewDraft.mockExams = [
+                .init(title: "1회", score: 91, maximum: 104, average: 71, highest: 101, rank: 2, attendees: 20, comment: "1코멘트"),
+                .init(title: "2회", score: 88, maximum: 100, average: 72, highest: 99, rank: 3, attendees: 19, comment: "2코멘트"),
+                .init(title: "3회", score: 79, maximum: 100, average: 68, highest: 96, rank: 5, attendees: 18, comment: "3코멘트")
+            ]
+            let input = previewDraft.lessonInput(for: DefaultPresets.mock)
+            return input.exams.map(\.score) == [91, 88, 79]
+                && input.exams.map(\.maximum) == [104, 100, 100]
+                && input.exams.map(\.comment) == ["1코멘트", "2코멘트", "3코멘트"]
+                && input.exams.map(\.attendees) == [20, 19, 18]
+        }
+        check("일반 수업·모의고사 Preset 변수 분리", failures: &failures) {
+            let regular = TemplateEngine.supportedTokens(for: .regular)
+            let mock = TemplateEngine.supportedTokens(for: .mock)
+            var invalidMock = DefaultPresets.mock
+            invalidMock.presentTemplate += "\n{{homework_score}}"
+            var invalidRegular = DefaultPresets.regular
+            invalidRegular.presentTemplate += "\n{{mock1_score}}"
+            let mockRejected = (try? TemplateEngine.validate(invalidMock)) == nil
+            let regularRejected = (try? TemplateEngine.validate(invalidRegular)) == nil
+            return regular.contains("homework_score") && regular.contains("test_comment")
+                && !regular.contains("mock1_score") && !regular.contains("exam_sections")
+                && mock.contains("mock1_score") && mock.contains("mock2_comment") && mock.contains("mock3_rank")
+                && !mock.contains("homework_score") && !mock.contains("test_comment") && !mock.contains("exam_unit")
+                && mockRejected && regularRejected
+        }
+        check("모의고사 회차별 Preset 변수 렌더링", failures: &failures) {
+            var preset = DefaultPresets.mock
+            preset.presentTemplate = "{{mock1_title}}|{{mock1_score}}/{{mock1_max}}|{{mock1_average}}|{{mock1_highest}}|{{mock1_rank}}|{{mock1_attendees}}|{{mock1_comment}}"
+            let input = PresetPreviewDraft().lessonInput(for: preset)
+            guard let rendered = try? TemplateEngine.render(preset: preset, input: input) else { return false }
+            return rendered.contains("기말 모의고사 1회차|92/100|76|98|2|20|1회차 틀린 문제")
+        }
         check("Preset 변수 사용자 설명과 엔진 지원 목록 일치", failures: &failures) {
             let sample = DefaultPresets.regular.presentTemplate
             let roundTrip = try? TemplateVariableCatalog.decodedFromAI(
@@ -694,7 +770,10 @@ enum SelfTest {
                 && prompt.contains(TemplateVariableCatalog.encodedForAI(preset.presentTemplate))
                 && !prompt.contains("{{notice}}")
                 && !prompt.contains("현재 결석 문구")
-                && TemplateVariableCatalog.all.allSatisfy {
+                && TemplateVariableCatalog.descriptors(for: preset.kind.category).allSatisfy {
+                    prompt.contains(TemplateVariableCatalog.marker(for: $0.token))
+                }
+                && !TemplateVariableCatalog.descriptors(for: .regular).filter { !TemplateVariableCatalog.descriptors(for: .direct).contains($0) }.contains {
                     prompt.contains(TemplateVariableCatalog.marker(for: $0.token))
                 }
         }

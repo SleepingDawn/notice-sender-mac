@@ -322,6 +322,11 @@ final class AppStore: ObservableObject {
         return created.id
     }
 
+    @discardableResult
+    func createPreset(category: PresetCategory, name rawName: String) throws -> UUID {
+        try createPreset(kind: category.defaultPresetKind, name: rawName)
+    }
+
     func updatePreset(_ preset: MessagePreset) throws {
         guard let index = database.presets.firstIndex(where: { $0.id == preset.id }) else {
             throw PresetManagementError.presetNotFound

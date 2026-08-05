@@ -8,6 +8,32 @@ enum PresetKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case regular = "일반 수업"
     case mock = "모의고사"
     var id: String { rawValue }
+
+    /// User-facing sheet type. Older specialized lesson presets remain decodable,
+    /// but they all use the same normal-class spreadsheet shape.
+    var category: PresetCategory {
+        switch self {
+        case .direct: .direct
+        case .mock: .mock
+        case .first, .testOnly, .homeworkOnly, .regular: .regular
+        }
+    }
+}
+
+enum PresetCategory: String, Codable, CaseIterable, Identifiable, Sendable {
+    case regular = "일반 수업"
+    case mock = "모의고사"
+    case direct = "직접입력"
+
+    var id: String { rawValue }
+
+    var defaultPresetKind: PresetKind {
+        switch self {
+        case .regular: .regular
+        case .mock: .mock
+        case .direct: .direct
+        }
+    }
 }
 
 enum LessonAttendanceMode: String, Codable, CaseIterable, Identifiable, Sendable {

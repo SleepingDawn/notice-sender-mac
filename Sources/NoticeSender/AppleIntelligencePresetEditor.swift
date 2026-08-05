@@ -203,7 +203,7 @@ enum AppleIntelligencePresetEditor {
         ---
 
         학생·수업 정보 필드 코드 사전:
-        \(TemplateVariableCatalog.aiPromptGuide)
+        \(TemplateVariableCatalog.aiPromptGuide(for: preset))
 
         반드시 그대로 남겨야 하는 출석 문구 변수:
         \(TemplateEngine.tokens(in: preset.presentTemplate).map { TemplateVariableCatalog.marker(for: $0) }.joined(separator: ", "))

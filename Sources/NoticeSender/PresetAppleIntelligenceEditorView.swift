@@ -23,7 +23,9 @@ struct PresetAppleIntelligenceEditorView: View {
                 )
                 .foregroundStyle(availability.isAvailable ? .primary : .secondary)
 
-                Text("변수명을 몰라도 됩니다. 예: ‘출석 문구를 더 따뜻하게 바꾸고, 과제 성취도 뒤에 테스트 점수를 안내해줘.’")
+                Text(draft.kind.category == .mock
+                     ? "변수명을 몰라도 됩니다. 예: ‘1~3회차 모의고사 점수와 코멘트를 회차별로 보여줘.’"
+                     : "변수명을 몰라도 됩니다. 예: ‘출석 문구를 더 따뜻하게 바꾸고, 과제 성취도 뒤에 테스트 점수를 안내해줘.’")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
@@ -36,7 +38,7 @@ struct PresetAppleIntelligenceEditorView: View {
 
                 HStack {
                     DisclosureGroup("AI가 사용할 수 있는 학생·수업 정보") {
-                        Text(TemplateVariableCatalog.friendlyLabels)
+                        Text(TemplateVariableCatalog.friendlyLabels(for: draft))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.top, 4)
