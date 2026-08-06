@@ -45,8 +45,8 @@ enum BatchParser {
             if item.allMessages.isEmpty && !allowEmptyMessages {
                 issues.append(ValidationIssue(severity: .error, row: index + 1, message: "발송할 메시지가 비어 있습니다."))
             }
-            if item.allMessages.count > 5 {
-                issues.append(ValidationIssue(severity: .error, row: index + 1, message: "학생당 메시지는 최대 5개까지 전송할 수 있습니다."))
+            if item.allMessages.count > BatchItem.maximumMessageCount {
+                issues.append(ValidationIssue(severity: .error, row: index + 1, message: "학생당 메시지는 최대 \(BatchItem.maximumMessageCount)개까지 전송할 수 있습니다."))
             }
             if item.allMessages.contains(where: containsFormulaError) {
                 issues.append(ValidationIssue(severity: .error, row: index + 1, message: "공지 멘트에 Sheet 수식 오류가 포함되어 있습니다."))

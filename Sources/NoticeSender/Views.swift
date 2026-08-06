@@ -1165,7 +1165,7 @@ struct LessonManagementView: View {
     @State private var lessonDryRun = true
     @State private var lessonSelectionRevision = 0
     @State private var isCommonMessageEnabled = false
-    @State private var commonMessage = ""
+    @State private var commonMessages = [""]
     @State private var showingMissingNicknameWarning = false
     @State private var missingNicknameIssues: [DirectNoticeNicknameIssue] = []
     @State private var lessonAttachmentPaths: [UUID: [String]] = [:]
@@ -1183,7 +1183,7 @@ struct LessonManagementView: View {
         let includedRows = PreparedNoticeSelection.includedRows(performanceRows)
         guard !includedRows.isEmpty else { return false }
         if preset.kind.category == .direct {
-            return effectiveCommonMessage != nil
+            return !effectiveCommonMessages.isEmpty
                 || PreparedNoticeSelection.directMessagesAreReady(in: performanceRows, allowEmptyMessages: lessonDryRun)
         }
         guard !draft.progress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
@@ -1201,8 +1201,8 @@ struct LessonManagementView: View {
         }
     }
 
-    private var effectiveCommonMessage: String? {
-        CommonMessagePolicy.effectiveMessage(isEnabled: isCommonMessageEnabled, text: commonMessage)
+    private var effectiveCommonMessages: [String] {
+        CommonMessagePolicy.effectiveMessages(isEnabled: isCommonMessageEnabled, texts: commonMessages)
     }
 
     private var previewRows: [LessonPreviewRow] {
@@ -1212,7 +1212,7 @@ struct LessonManagementView: View {
                 guard let student = store.student(id: performance.id) else { return nil }
                 let message = DirectNoticeMessage.normalized(performance.noticeMessage)
                 let error = message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    && effectiveCommonMessage == nil
+                    && effectiveCommonMessages.isEmpty
                     && !lessonDryRun
                     ? "공지 멘트가 비어 있습니다."
                     : nil
@@ -1384,7 +1384,7 @@ struct LessonManagementView: View {
         .onChange(of: isCommonMessageEnabled) { _, _ in
             invalidateLessonBatchForSelectionChange()
         }
-        .onChange(of: commonMessage) { _, _ in
+        .onChange(of: commonMessages) { _, _ in
             invalidateLessonBatchForSelectionChange()
         }
         .onChange(of: draft.classID) { _, newClassID in
@@ -1425,19 +1425,54 @@ struct LessonManagementView: View {
     private var commonMessageSection: some View {
         GroupBox("공통 메시지") {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("공통 메시지 사용", isOn: $isCommonMessageEnabled)
-                    .toggleStyle(.checkbox)
-                    .disabled(kakao.isBusy || isPreparingSend)
-                TextEditor(text: $commonMessage)
-                    .frame(height: 82)
-                    .disabled(!isCommonMessageEnabled || kakao.isBusy || isPreparingSend)
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
-                Text(effectiveCommonMessage == nil
+                HStack {
+                    Toggle("공통 메시지 사용", isOn: $isCommonMessageEnabled)
+                        .toggleStyle(.checkbox)
+                        .disabled(kakao.isBusy || isPreparingSend)
+                    Spacer()
+                    Button { addCommonMessage() } label: {
+                        Label("공통 메시지 추가", systemImage: "plus")
+                    }
+                    .disabled(commonMessages.count >= CommonMessagePolicy.maximumMessageCount || kakao.isBusy || isPreparingSend)
+                }
+                ForEach(commonMessages.indices, id: \.self) { index in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text("공통 메시지 \(index + 1)").font(.subheadline)
+                            Spacer()
+                            Button(role: .destructive) { removeCommonMessage(at: index) } label: {
+                                Label("공통 메시지 \(index + 1) 삭제", systemImage: "trash")
+                                    .labelStyle(.iconOnly)
+                            }
+                            .help(commonMessages.count == 1 ? "내용을 지우고 기본 입력칸 하나는 유지합니다." : "이 공통 메시지를 삭제합니다.")
+                            .disabled(kakao.isBusy || isPreparingSend)
+                        }
+                        TextEditor(text: $commonMessages[index])
+                            .frame(height: 82)
+                            .disabled(!isCommonMessageEnabled || kakao.isBusy || isPreparingSend)
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
+                    }
+                }
+                Text(effectiveCommonMessages.isEmpty
                      ? "체크가 꺼져 있거나 공백·줄바꿈만 입력된 경우 사용하지 않습니다."
-                     : "발송 체크된 학생마다 학생별 공지 다음에 한 번씩 전송됩니다.")
+                     : "발송 체크된 학생마다 학생별 공지 뒤에 공통 메시지 \(effectiveCommonMessages.count)개를 입력 순서대로 전송합니다.")
                     .font(.caption)
-                    .foregroundStyle(effectiveCommonMessage == nil ? Color.secondary : Color.blue)
+                    .foregroundStyle(effectiveCommonMessages.isEmpty ? Color.secondary : Color.blue)
             }.padding(6)
+        }
+    }
+
+    private func addCommonMessage() {
+        guard commonMessages.count < CommonMessagePolicy.maximumMessageCount else { return }
+        commonMessages.append("")
+    }
+
+    private func removeCommonMessage(at index: Int) {
+        guard commonMessages.indices.contains(index) else { return }
+        if commonMessages.count == 1 {
+            commonMessages[0] = ""
+        } else {
+            commonMessages.remove(at: index)
         }
     }
 
@@ -1539,12 +1574,16 @@ struct LessonManagementView: View {
     private func lessonPreviewMessage(for row: LessonPreviewRow) -> String {
         let messages = CommonMessagePolicy.orderedMessages(
             individualNotice: row.message,
-            commonMessage: effectiveCommonMessage
+            commonMessages: effectiveCommonMessages
         )
+        let hasIndividualNotice = !row.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return messages.enumerated().map { index, message in
-            let label = index == 0 && !row.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "학생별 공지"
-                : "공통 메시지"
+            let label: String
+            if hasIndividualNotice && index == 0 {
+                label = "학생별 공지"
+            } else {
+                label = "공통 메시지 \(index - (hasIndividualNotice ? 1 : 0) + 1)"
+            }
             return "[\(label)]\n\(message)"
         }.joined(separator: "\n\n")
     }
@@ -1849,7 +1888,7 @@ struct LessonManagementView: View {
             }
             let messages = CommonMessagePolicy.orderedMessages(
                 individualNotice: row.message,
-                commonMessage: effectiveCommonMessage
+                commonMessages: effectiveCommonMessages
             )
             guard let firstMessage = messages.first else { return nil }
             return BatchItem(
@@ -1860,7 +1899,7 @@ struct LessonManagementView: View {
                 message: firstMessage,
                 chatID: store.student(id: row.studentID)?.chatID,
                 additionalMessages: Array(messages.dropFirst()),
-                preserveMessageWhitespace: preset.kind == .direct || effectiveCommonMessage != nil
+                preserveMessageWhitespace: preset.kind == .direct || !effectiveCommonMessages.isEmpty
             )
         }
         if items.count != includedCount {

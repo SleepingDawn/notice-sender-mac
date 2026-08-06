@@ -254,6 +254,7 @@ enum SelfTest {
                     "",
                     "",
                     "",
+                    "",
                     "첫 줄\n둘째 줄",
                 ]
         }
@@ -882,24 +883,25 @@ enum SelfTest {
         }
         check("공통 메시지 체크·빈 문자열 사용 규칙", failures: &failures) {
             let message = "  공통 안내입니다.\n다음 줄  "
-            return CommonMessagePolicy.effectiveMessage(isEnabled: false, text: message) == nil
-                && CommonMessagePolicy.effectiveMessage(isEnabled: true, text: " \n\t ") == nil
-                && CommonMessagePolicy.effectiveMessage(isEnabled: true, text: message) == message
+            return CommonMessagePolicy.effectiveMessages(isEnabled: false, texts: [message]).isEmpty
+                && CommonMessagePolicy.effectiveMessages(isEnabled: true, texts: [" \n\t "]).isEmpty
+                && CommonMessagePolicy.effectiveMessages(isEnabled: true, texts: [message, "", "둘째 공통 메시지"]) == [message, "둘째 공통 메시지"]
+                && CommonMessagePolicy.effectiveMessages(isEnabled: true, texts: (1...6).map(String.init)) == ["1", "2", "3", "4", "5"]
         }
         check("학생별 공지 다음 공통 메시지 순서·공통만 발송", failures: &failures) {
-            let common = "공통 메시지"
-            return CommonMessagePolicy.orderedMessages(individualNotice: "학생 A 공지", commonMessage: common) == ["학생 A 공지", common]
-                && CommonMessagePolicy.orderedMessages(individualNotice: " \n ", commonMessage: common) == [common]
-                && CommonMessagePolicy.orderedMessages(individualNotice: "학생 A 공지", commonMessage: nil) == ["학생 A 공지"]
+            let common = ["공통 메시지 1", "공통 메시지 2"]
+            return CommonMessagePolicy.orderedMessages(individualNotice: "학생 A 공지", commonMessages: common) == ["학생 A 공지", "공통 메시지 1", "공통 메시지 2"]
+                && CommonMessagePolicy.orderedMessages(individualNotice: " \n ", commonMessages: common) == common
+                && CommonMessagePolicy.orderedMessages(individualNotice: "학생 A 공지", commonMessages: []) == ["학생 A 공지"]
         }
         check("발송 체크 학생에게만 공통 메시지·학생 단위 순차 발송", failures: &failures) {
             let studentA = PreparedNoticeRow(id: UUID(), number: 1, name: "학생 A", nickname: "A", noticeMessage: "메시지 A")
             var excluded = PreparedNoticeRow(id: UUID(), number: 2, name: "제외 학생", nickname: "제외", noticeMessage: "제외 메시지")
             excluded.isIncluded = false
             let studentB = PreparedNoticeRow(id: UUID(), number: 3, name: "학생 B", nickname: "B", noticeMessage: "메시지 B")
-            let common = CommonMessagePolicy.effectiveMessage(isEnabled: true, text: "공통 메시지")
+            let common = CommonMessagePolicy.effectiveMessages(isEnabled: true, texts: ["공통 메시지 1", "공통 메시지 2"])
             let items = PreparedNoticeSelection.includedRows([studentA, excluded, studentB]).map { row in
-                let messages = CommonMessagePolicy.orderedMessages(individualNotice: row.noticeMessage, commonMessage: common)
+                let messages = CommonMessagePolicy.orderedMessages(individualNotice: row.noticeMessage, commonMessages: common)
                 return BatchItem(
                     studentID: row.id,
                     studentName: row.name,
@@ -911,22 +913,22 @@ enum SelfTest {
                 )
             }
             return items.map(\.studentName) == ["학생 A", "학생 B"]
-                && items.flatMap(\.allMessages) == ["메시지 A", "공통 메시지", "메시지 B", "공통 메시지"]
+                && items.flatMap(\.allMessages) == ["메시지 A", "공통 메시지 1", "공통 메시지 2", "메시지 B", "공통 메시지 1", "공통 메시지 2"]
         }
         check("공통 메시지 최대 5개 개별 유지", failures: &failures) {
             let student = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "테스트방")
-            let item = BatchItem(studentID: student.id, studentName: student.name, nickname: student.nickname, chatRoomName: student.chatRoomName, message: "1", additionalMessages: ["2", "3", "4", "5"])
+            let item = BatchItem(studentID: student.id, studentName: student.name, nickname: student.nickname, chatRoomName: student.chatRoomName, message: "학생별 공지", additionalMessages: ["공통 1", "공통 2", "공통 3", "공통 4", "공통 5"])
             let metadata = BatchMetadata(schemaVersion: 1, classID: UUID(), sessionID: UUID(), date: "7월 12일", presetID: UUID(), presetVersion: 0, isLegacy: true)
             let batch = SendBatch(metadata: metadata, items: [item])
             let db = AppDatabase(students: [student])
-            return item.allMessages == ["1", "2", "3", "4", "5"] && !BatchParser.validate(batch: batch, database: db).contains { $0.message.contains("최대 5개") }
+            return item.allMessages == ["학생별 공지", "공통 1", "공통 2", "공통 3", "공통 4", "공통 5"] && !BatchParser.validate(batch: batch, database: db).contains { $0.message.contains("최대 6개") }
         }
-        check("메시지 6개 발송 차단", failures: &failures) {
+        check("메시지 7개 발송 차단", failures: &failures) {
             let student = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "테스트방")
-            let item = BatchItem(studentID: student.id, studentName: student.name, nickname: student.nickname, chatRoomName: student.chatRoomName, message: "1", additionalMessages: ["2", "3", "4", "5", "6"])
+            let item = BatchItem(studentID: student.id, studentName: student.name, nickname: student.nickname, chatRoomName: student.chatRoomName, message: "1", additionalMessages: ["2", "3", "4", "5", "6", "7"])
             let metadata = BatchMetadata(schemaVersion: 1, classID: UUID(), sessionID: UUID(), date: "7월 12일", presetID: UUID(), presetVersion: 0, isLegacy: true)
             let batch = SendBatch(metadata: metadata, items: [item])
-            return BatchParser.validate(batch: batch, database: AppDatabase(students: [student])).contains { $0.message.contains("최대 5개") }
+            return BatchParser.validate(batch: batch, database: AppDatabase(students: [student])).contains { $0.message.contains("최대 6개") }
         }
         check("kmsg 안전 옵션 고정", failures: &failures) {
             let arguments = KmsgSafeAdapter.safeArguments(roomName: "정확한 방", message: "메시지", verifyOnly: true)

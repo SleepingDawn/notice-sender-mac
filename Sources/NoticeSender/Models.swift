@@ -229,6 +229,8 @@ enum BatchItemStatus: String, Codable, Sendable {
 }
 
 struct BatchItem: Codable, Identifiable, Hashable, Sendable {
+    static let maximumMessageCount = 6
+
     var id: UUID = UUID()
     var studentID: UUID
     var studentName: String
@@ -238,7 +240,7 @@ struct BatchItem: Codable, Identifiable, Hashable, Sendable {
     var chatID: String? = nil
     var status: BatchItemStatus = .ready
     var error: String?
-    /// Messages after the first one. Total messages are capped at five.
+    /// Messages after the first one. One student notice can be followed by up to five common messages.
     var additionalMessages: [String]? = nil
     /// Absolute paths selected by the depth-limited attachment scanner.
     var attachmentPaths: [String]? = nil
@@ -255,21 +257,20 @@ struct BatchItem: Codable, Identifiable, Hashable, Sendable {
 }
 
 enum CommonMessagePolicy {
-    static func effectiveMessage(isEnabled: Bool, text: String) -> String? {
-        guard isEnabled,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return nil }
-        return text
+    static let maximumMessageCount = 5
+
+    static func effectiveMessages(isEnabled: Bool, texts: [String]) -> [String] {
+        guard isEnabled else { return [] }
+        return texts.prefix(maximumMessageCount).filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
-    /// Keeps every student's own notice first and the shared message second.
+    /// Keeps every student's own notice first, followed by each shared message in input order.
     /// Empty/whitespace-only values are not included in the send sequence.
-    static func orderedMessages(individualNotice: String, commonMessage: String?) -> [String] {
-        [individualNotice, commonMessage].compactMap { message in
-            guard let message,
-                  !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { return nil }
-            return message
+    static func orderedMessages(individualNotice: String, commonMessages: [String]) -> [String] {
+        ([individualNotice] + commonMessages.prefix(maximumMessageCount)).filter { message in
+            !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 }

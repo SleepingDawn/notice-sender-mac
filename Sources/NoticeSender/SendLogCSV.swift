@@ -15,6 +15,7 @@ enum SendLogCSV {
         "공지 본문 3",
         "공지 본문 4",
         "공지 본문 5",
+        "공지 본문 6",
         "상세",
     ]
 
@@ -23,8 +24,8 @@ enum SendLogCSV {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         let rows = [headers] + logs.map { log in
-            let messages = Array((log.messages ?? []).prefix(5))
-            let paddedMessages = messages + Array(repeating: "", count: 5 - messages.count)
+            let messages = Array((log.messages ?? []).prefix(BatchItem.maximumMessageCount))
+            let paddedMessages = messages + Array(repeating: "", count: BatchItem.maximumMessageCount - messages.count)
             return [
                 log.id.uuidString.lowercased(),
                 log.batchID.uuidString.lowercased(),

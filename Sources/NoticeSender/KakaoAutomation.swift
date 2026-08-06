@@ -318,7 +318,7 @@ final class KakaoAutomationService: ObservableObject {
             return
         }
 
-        let messages = Array(item.allMessages.prefix(5))
+        let messages = Array(item.allMessages.prefix(BatchItem.maximumMessageCount))
         let attachmentPaths = item.attachmentPaths ?? []
         if messages.isEmpty, attachmentPaths.isEmpty {
             _ = try await kmsg.verify(
