@@ -45,6 +45,14 @@ swift run NoticeSender --self-test
 첫 빌드에서는 XLSX 읽기용 `CoreXLSX 0.14.2`를 Swift Package Manager가 내려받습니다.
 `install-app.sh`는 앱 전용 로컬 코드 서명 인증서를 최초 한 번 만들고 `/Applications/공지발송.app`에 설치합니다. 이후 빌드도 같은 인증서와 설치 경로를 사용하므로 손쉬운 사용 권한이 앱 업데이트마다 풀리지 않습니다.
 
+개발용 TEST 앱은 다음 명령으로 만듭니다.
+
+```sh
+./scripts/build-dev-app.sh
+```
+
+빌드 전 실행 중이거나 `/Applications`에 설치된 이전 `TEST_공지.app`을 제거한 뒤 새 앱을 `dist/TEST_공지.app`에 생성합니다. `/Applications`에 설치하고 바로 열려면 `./scripts/install-dev-app.sh`를 사용합니다.
+
 ## 처음 사용하는 순서
 
 1. `시작 및 진단`에서 `2026 1학기.xlsx`를 가져옵니다.
