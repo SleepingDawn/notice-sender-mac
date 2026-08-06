@@ -805,6 +805,20 @@ enum SelfTest {
             let result = try AttachmentScanner.scan(rootPath: root.path, students: [student])
             return result.scannedFileCount == 3 && result.filesByStudentID[student.id]?.count == 2
         }
+        check("첨부파일은 호칭 대신 학생 DB 전체 이름으로만 매칭", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-full-name-attachment-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let student = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "테스트방")
+            let fullNameFile = root.appendingPathComponent("한성25홍길동_성적표.pdf")
+            let nicknameOnlyFile = root.appendingPathComponent("한성25길동이_성적표.pdf")
+            try Data("full name".utf8).write(to: fullNameFile)
+            try Data("nickname only".utf8).write(to: nicknameOnlyFile)
+            let result = try AttachmentScanner.scan(rootPath: root.path, students: [student])
+            let names = result.filesByStudentID[student.id]?.map(\.lastPathComponent) ?? []
+            return result.scannedFileCount == 2
+                && names == [fullNameFile.lastPathComponent]
+        }
         check("첨부파일 최대 깊이 3·모든 일반 파일 허용", failures: &failures) {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-attachment-depth-\(UUID().uuidString)", isDirectory: true)
             let depth1 = root.appendingPathComponent("1", isDirectory: true)

@@ -1493,7 +1493,7 @@ struct LessonManagementView: View {
                     }
                     .disabled(previewRows.isEmpty || isScanningLessonAttachments || kakao.isBusy || isPreparingSend)
                 }
-                Text("선택 폴더를 깊이 0으로 보고 최대 깊이 3까지 확인합니다. 파일명에 학교, 학번(예: 25 또는 2025), 정확한 성명이 모두 포함된 모든 일반 파일을 학생별로 연결합니다.")
+                Text("선택 폴더를 깊이 0으로 보고 최대 깊이 3까지 확인합니다. 파일명에 학교, 학번(예: 25 또는 2025), 학생 DB의 전체 이름(예: 홍길동)이 모두 포함된 모든 일반 파일을 학생별로 연결합니다. 호칭(예: 길동이)은 첨부파일 매칭에 사용하지 않습니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }.padding(6)

@@ -60,7 +60,10 @@ enum AttachmentScanner {
             (
                 id: student.id,
                 school: normalized(student.school),
-                name: normalized(student.name),
+                // Attachments must always use the student's full DB name.
+                // Nicknames are intentionally excluded: "홍길동" must not
+                // match a file that only contains the nickname "길동이".
+                fullName: normalized(student.name),
                 shortYear: AdmissionYearPolicy.formatted(student.admissionYear)
             )
         }
@@ -68,10 +71,10 @@ enum AttachmentScanner {
         for file in files {
             let filename = normalized(file.deletingPathExtension().lastPathComponent)
             let candidates = identities.filter { identity in
-                guard !identity.school.isEmpty, !identity.name.isEmpty else { return false }
+                guard !identity.school.isEmpty, !identity.fullName.isEmpty else { return false }
                 let longYear = "20\(identity.shortYear)"
                 return filename.contains(identity.school)
-                    && filename.contains(identity.name)
+                    && filename.contains(identity.fullName)
                     && (filename.contains(identity.shortYear) || filename.contains(longYear))
             }
 
@@ -81,8 +84,8 @@ enum AttachmentScanner {
             let resolved = candidates.filter { candidate in
                 !candidates.contains { other in
                     other.id != candidate.id
-                        && other.name.count > candidate.name.count
-                        && other.name.hasPrefix(candidate.name)
+                        && other.fullName.count > candidate.fullName.count
+                        && other.fullName.hasPrefix(candidate.fullName)
                 }
             }
             for candidate in resolved {
