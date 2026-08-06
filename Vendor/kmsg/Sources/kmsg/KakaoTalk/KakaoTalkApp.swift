@@ -9,6 +9,8 @@ public enum WindowRecoveryMode: Sendable {
 /// Represents the KakaoTalk application and provides access to its UI elements
 public final class KakaoTalkApp: Sendable {
     public static let bundleIdentifier = "com.kakao.KakaoTalkMac"
+    /// `⌘2` is KakaoTalk Mac's Chats-tab shortcut. Used only if AX navigation fails.
+    public static let chatListShortcutKeyCode: CGKeyCode = 19
 
     private let app: UIElement
     public let processIdentifier: pid_t
@@ -310,19 +312,46 @@ public final class KakaoTalkApp: Sendable {
         let chatroomsButton =
             root.findFirst(identifier: "chatrooms") ??
             applicationElement.findFirst(identifier: "chatrooms")
-        guard let chatroomsButton else {
-            trace?("chats: chatrooms navigation button unavailable; preserving current window")
-            return root
-        }
+
         activate()
-        do {
-            try chatroomsButton.press()
-            trace?("chats: pressed chatrooms navigation button")
+        var shouldUseShortcutFallback = chatroomsButton == nil
+        if let chatroomsButton {
+            do {
+                try chatroomsButton.press()
+                trace?("chats: pressed chatrooms navigation button")
+                Thread.sleep(forTimeInterval: max(0.05, settleDelay))
+                let selected: Bool? = chatroomsButton.attributeOptional(kAXSelectedAttribute)
+                if selected == false {
+                    trace?("chats: chatrooms navigation button did not become selected; using Command-2 fallback")
+                    shouldUseShortcutFallback = true
+                }
+            } catch {
+                trace?("chats: failed to press chatrooms navigation button (\(error)); using Command-2 fallback")
+                shouldUseShortcutFallback = true
+            }
+        } else {
+            trace?("chats: chatrooms navigation button unavailable; using Command-2 fallback")
+        }
+
+        if shouldUseShortcutFallback {
+            pressChatListShortcut()
+            trace?("chats: pressed Command-2 fallback")
             Thread.sleep(forTimeInterval: max(0.05, settleDelay))
-        } catch {
-            trace?("chats: failed to press chatrooms navigation button (\(error))")
         }
         return chatListWindow ?? mainWindow ?? root
+    }
+
+    private func pressChatListShortcut() {
+        let source = CGEventSource(stateID: .privateState)
+        for isKeyDown in [true, false] {
+            guard let event = CGEvent(
+                keyboardEventSource: source,
+                virtualKey: Self.chatListShortcutKeyCode,
+                keyDown: isKeyDown
+            ) else { continue }
+            event.flags = .maskCommand
+            event.postToPid(processIdentifier)
+        }
     }
 
     // MARK: - UI Navigation

@@ -938,6 +938,9 @@ enum SelfTest {
                 && arguments.contains("--verify-only")
                 && !arguments.contains("--dry-run")
         }
+        check("카카오톡 채팅 탭 Command-2 fallback", failures: &failures) {
+            KakaoTalkApp.chatListShortcutKeyCode == 19
+        }
         check("kmsg 즉시 중지 토큰", failures: &failures) {
             let token = KmsgCancellationToken()
             guard !token.isCancelled else { return false }

@@ -119,7 +119,12 @@ struct ChatWindowResolver {
             }
         }
 
-        let searchWindow = selectSearchWindow(fallback: usableWindow)
+        let chatListWindow = kakao.openChatListTab(
+            fallbackWindow: usableWindow,
+            settleDelay: 0.35,
+            trace: { message in runner.log(message) }
+        )
+        let searchWindow = selectSearchWindow(fallback: chatListWindow ?? usableWindow)
         standardizeReadableWindow(searchWindow, label: "search root window")
         try ensureNotCancelled()
         let chatWindow = try openChatViaSearch(query: query, in: searchWindow, fallbackWindow: usableWindow)
@@ -140,6 +145,11 @@ struct ChatWindowResolver {
         let usableWindow = try requireUsableWindow()
         try ensureNotCancelled()
         let query = record.displayName
+        let chatListWindow = kakao.openChatListTab(
+            fallbackWindow: usableWindow,
+            settleDelay: 0.35,
+            trace: { message in runner.log(message) }
+        )
 
         // A title-only existing-window match is unsafe for a selected chat_id:
         // another room may expose the same visible title. Strict callers always
@@ -150,7 +160,7 @@ struct ChatWindowResolver {
         }
 
         if !requireUniqueMatch,
-           let chatListWindow = kakao.chatListWindow,
+           let chatListWindow = chatListWindow ?? kakao.chatListWindow,
            let chatWindow = openChatListRow(chatID: chatID, query: query, in: chatListWindow, fallbackWindow: usableWindow)
         {
             standardizeReadableWindow(chatWindow, label: "opened chat window")
@@ -161,7 +171,7 @@ struct ChatWindowResolver {
         // or virtualizes the recent-chat list. Fall back to the same exact and
         // unique title search instead of failing at the list-row lookup.
         runner.log("chat_id: exact row unavailable; falling back to exact search for '\(query)'")
-        let searchWindow = selectSearchWindow(fallback: usableWindow)
+        let searchWindow = selectSearchWindow(fallback: chatListWindow ?? usableWindow)
         standardizeReadableWindow(searchWindow, label: "search root window")
         try ensureNotCancelled()
         let chatWindow = try openChatViaSearch(query: query, in: searchWindow, fallbackWindow: usableWindow)
