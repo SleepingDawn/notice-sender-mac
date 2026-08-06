@@ -454,6 +454,21 @@ enum SelfTest {
                 && result.homeworkMaximum == "20"
                 && result.testMaximum == "10"
         }
+        check("직접입력 첫 학생 메시지 셀 수정·삭제", failures: &failures) {
+            let first = PreparedNoticeRow(id: UUID(), number: 1, name: "김길동", nickname: "길동이", noticeMessage: "기존 공지")
+            let second = PreparedNoticeRow(id: UUID(), number: 2, name: "박하연", nickname: "하연이")
+            let firstMessage = SpreadsheetCanvas.Cell(row: 1, column: 3)
+            let changes = [SpreadsheetCanvas.CellChange(row: 1, column: 3, value: "첫 학생 공지")]
+            let updated = PerformanceSpreadsheet.applying(changes, to: [first, second], homeworkMaximum: "", testMaximum: "", layout: .direct)
+            let deletion = SpreadsheetCanvas.deletionChanges(anchor: firstMessage, cursor: firstMessage, studentCount: 2, layout: .direct) { row, column in
+                row == 1 && column == 3 ? updated.rows[0].noticeMessage : ""
+            }
+            return SpreadsheetCanvas.isEditable(firstMessage, studentCount: 2, layout: .direct)
+                && !SpreadsheetCanvas.isEditable(.init(row: 0, column: 3), studentCount: 2, layout: .direct)
+                && !SpreadsheetCanvas.isEditable(.init(row: 1, column: 2), studentCount: 2, layout: .direct)
+                && updated.rows[0].noticeMessage == "첫 학생 공지"
+                && deletion == [.init(row: 1, column: 3, value: "")]
+        }
         check("학생 발송 선택 기본값·제외 문구 검증", failures: &failures) {
             let included = PreparedNoticeRow(id: UUID(), number: 1, name: "김길동", nickname: "길동이", noticeMessage: "\"선택 공지\"")
             var excluded = PreparedNoticeRow(id: UUID(), number: 2, name: "박하연", nickname: "하연이")

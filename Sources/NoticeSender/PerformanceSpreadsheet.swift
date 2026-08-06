@@ -20,7 +20,7 @@ struct PerformanceSpreadsheet: NSViewRepresentable {
         var updatedTestMaximum = testMaximum
         var updatedMockMaximums = mockMaximums
         for change in changes {
-            if change.row == 1 {
+            if layout != .direct, change.row == 1 {
                 if layout == .regular {
                     if change.column == 6 { updatedHomeworkMaximum = change.value }
                     if change.column == 7 { updatedTestMaximum = change.value }
@@ -372,23 +372,27 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
         needsDisplay = true
     }
     private func editable(_ cell: Cell) -> Bool {
-        if layout == .direct { return cell.row >= firstStudentRow && cell.row <= lastRow && cell.column == 3 }
-        let totalEditable = cell.row == 1 && (layout == .regular ? [6, 7].contains(cell.column) : (cell.column >= 6 && cell.column < 6 + mockExamCount))
-        return totalEditable || (cell.row >= firstStudentRow && cell.row <= lastRow && cell.column >= 4)
+        Self.isEditable(cell, studentCount: rows.count, layout: layout, mockExamCount: mockExamCount)
+    }
+    nonisolated static func isEditable(_ cell: Cell, studentCount: Int, layout: PresetCategory = .regular, mockExamCount: Int = 3) -> Bool {
+        let firstStudentRow = layout == .direct ? 1 : 2
+        let lastStudentRow = firstStudentRow + studentCount - 1
+        if layout == .direct {
+            return cell.row >= firstStudentRow && cell.row <= lastStudentRow && cell.column == 3
+        }
+        let totalEditable = cell.row == 1 && (layout == .regular ? [6, 7].contains(cell.column) : (cell.column >= 6 && cell.column < 6 + max(1, min(3, mockExamCount))))
+        return totalEditable || (cell.row >= firstStudentRow && cell.row <= lastStudentRow && cell.column >= 4)
     }
     nonisolated static func deletionChanges(anchor: Cell, cursor: Cell, studentCount: Int, layout: PresetCategory = .regular, mockExamCount: Int = 3, value: (Int, Int) -> String) -> [CellChange] {
         let rowRange = min(anchor.row, cursor.row)...max(anchor.row, cursor.row)
         let columnRange = min(anchor.column, cursor.column)...max(anchor.column, cursor.column)
         var changes: [CellChange] = []
-        let firstStudentRow = layout == .direct ? 1 : 2
-        let lastColumn = layout == .direct ? 3 : (layout == .regular ? 10 : 6 + max(1, min(3, mockExamCount)) * 2)
         for row in rowRange {
             for column in columnRange {
-                let directEditable = layout == .direct && row >= 1 && row < studentCount + 1 && column == 3
-                let totalEditable = layout != .direct && row == 1 && (layout == .regular ? [6, 7].contains(column) : (column >= 6 && column < 6 + max(1, min(3, mockExamCount))))
-                let studentEditable = layout != .direct && row >= firstStudentRow && row < studentCount + firstStudentRow && column >= 4 && column <= lastColumn
-                let isEditable = directEditable || totalEditable || studentEditable
-                if isEditable, !value(row, column).isEmpty { changes.append(CellChange(row: row, column: column, value: "")) }
+                let cell = Cell(row: row, column: column)
+                if isEditable(cell, studentCount: studentCount, layout: layout, mockExamCount: mockExamCount), !value(row, column).isEmpty {
+                    changes.append(CellChange(row: row, column: column, value: ""))
+                }
             }
         }
         return changes
@@ -452,8 +456,11 @@ final class SpreadsheetCanvas: NSView, NSTextViewDelegate {
         }
     }
     private func fillForCell(row: Int, column: Int) -> NSColor? {
+        if layout == .direct {
+            guard row == 0 || (row >= firstStudentRow && row <= lastRow) else { return nil }
+            return [.windowBackgroundColor, .systemGreen.withAlphaComponent(0.14), .lightGray, .systemYellow.withAlphaComponent(0.22)][column]
+        }
         guard row <= 1 else { return nil }
-        if layout == .direct { return [.windowBackgroundColor, .systemGreen.withAlphaComponent(0.14), .lightGray, .systemYellow.withAlphaComponent(0.22)][column] }
         if row == 1, column >= 6 { return column < 6 + mockExamCount ? .systemBlue.withAlphaComponent(0.12) : .windowBackgroundColor }
         if layout == .mock {
             if column < 6 { return [.windowBackgroundColor, .systemGreen.withAlphaComponent(0.14), .lightGray, .lightGray, .systemYellow.withAlphaComponent(0.2), .systemRed.withAlphaComponent(0.15)][column] }
