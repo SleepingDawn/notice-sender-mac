@@ -32,7 +32,11 @@ struct KakaoRunSummary: Identifiable, Sendable {
 
 enum BatchRunPolicy {
     static func shouldProcess(status: BatchItemStatus, dryRun: Bool) -> Bool {
-        dryRun || status != .sent
+        if dryRun { return true }
+        switch status {
+        case .ready, .verified, .failed: return true
+        case .sending, .sent, .uncertain, .skipped: return false
+        }
     }
 
     static func statusAfterSuccess(previousStatus: BatchItemStatus, dryRun: Bool) -> BatchItemStatus {
@@ -42,6 +46,17 @@ enum BatchRunPolicy {
 
     static func statusAfterFailure(previousStatus: BatchItemStatus, dryRun: Bool) -> BatchItemStatus {
         dryRun && previousStatus == .sent ? .sent : .failed
+    }
+
+    static func statusAfterCancellation(
+        previousStatus: BatchItemStatus,
+        dryRun: Bool,
+        deliveryMayHaveStarted: Bool
+    ) -> BatchItemStatus {
+        guard !dryRun, deliveryMayHaveStarted else {
+            return statusAfterFailure(previousStatus: previousStatus, dryRun: dryRun)
+        }
+        return .uncertain
     }
 }
 
@@ -237,16 +252,24 @@ final class KakaoAutomationService: ObservableObject {
             store.currentBatch = working
             statusText = "\(working.items[index].studentName): \(dryRun ? "드라이런" : "전송") 중"
             do {
+                cancellationToken.beginActivity("채팅방 확인")
                 try await process(
                     working.items[index],
                     dryRun: dryRun,
                     cancellationToken: cancellationToken
                 )
                 if shouldStop || cancellationToken.isCancelled {
-                    working.items[index].status = BatchRunPolicy.statusAfterFailure(previousStatus: previousStatus, dryRun: dryRun)
-                    working.items[index].error = "사용자 중지"
+                    let detail = cancellationDetail(for: cancellationToken)
+                    let interruptedStatus = BatchRunPolicy.statusAfterCancellation(
+                        previousStatus: previousStatus,
+                        dryRun: dryRun,
+                        deliveryMayHaveStarted: cancellationToken.currentDeliveryMayHaveStarted
+                    )
+                    working.items[index].status = interruptedStatus
+                    working.items[index].error = detail
                     failedCount += 1
                     wasStopped = true
+                    store.log(item: working.items[index], batchID: working.id, result: interruptedStatus, detail: detail)
                     store.currentBatch = working
                     statusText = "사용자가 작업을 중지했습니다."
                     break
@@ -257,12 +280,22 @@ final class KakaoAutomationService: ObservableObject {
                 store.log(item: working.items[index], batchID: working.id, result: dryRun ? .verified : .sent, detail: dryRun ? "드라이런: 정확한 방 제목 확인, 메시지·첨부 전송 없음" : "정확한 방 제목 확인 후 메시지·첨부 전송 완료")
                 store.currentBatch = working
             } catch {
-                working.items[index].status = BatchRunPolicy.statusAfterFailure(previousStatus: previousStatus, dryRun: dryRun)
-                let detail = (shouldStop || cancellationToken.isCancelled) ? "사용자 중지" : error.localizedDescription
+                let wasCancelled = shouldStop || cancellationToken.isCancelled
+                let resultingStatus = wasCancelled
+                    ? BatchRunPolicy.statusAfterCancellation(
+                        previousStatus: previousStatus,
+                        dryRun: dryRun,
+                        deliveryMayHaveStarted: cancellationToken.currentDeliveryMayHaveStarted
+                    )
+                    : BatchRunPolicy.statusAfterFailure(previousStatus: previousStatus, dryRun: dryRun)
+                working.items[index].status = resultingStatus
+                let detail = wasCancelled
+                    ? cancellationDetail(for: cancellationToken, underlyingError: error)
+                    : error.localizedDescription
                 working.items[index].error = detail
                 failedCount += 1
-                wasStopped = shouldStop || cancellationToken.isCancelled
-                store.log(item: working.items[index], batchID: working.id, result: .failed, detail: detail)
+                wasStopped = wasCancelled
+                store.log(item: working.items[index], batchID: working.id, result: resultingStatus, detail: detail)
                 store.currentBatch = working
                 statusText = (shouldStop || cancellationToken.isCancelled)
                     ? "사용자가 작업을 중지했습니다."
@@ -298,6 +331,25 @@ final class KakaoAutomationService: ObservableObject {
 
     func clearLastRunSummary() {
         lastRunSummary = nil
+    }
+
+    private func cancellationDetail(
+        for token: KmsgCancellationToken,
+        underlyingError: Error? = nil
+    ) -> String {
+        let activity = token.currentActivityDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let stopped = if let activity, !activity.isEmpty {
+            "사용자 중지 (중지 시점: \(activity))"
+        } else {
+            "사용자 중지"
+        }
+        guard let underlyingError,
+              underlyingError.localizedDescription != KmsgEmbeddedError.cancelled.localizedDescription
+        else {
+            return stopped
+        }
+        return "\(stopped); 직전 오류: \(underlyingError.localizedDescription)"
     }
 
     private func process(

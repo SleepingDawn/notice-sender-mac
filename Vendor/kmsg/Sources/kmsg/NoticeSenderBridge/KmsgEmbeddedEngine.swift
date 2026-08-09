@@ -29,6 +29,8 @@ public struct KmsgEmbeddedChat: Sendable {
 public final class KmsgCancellationToken: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private var currentActivity: String?
+    private var deliveryMayHaveStarted = false
 
     public init() {}
 
@@ -38,10 +40,63 @@ public final class KmsgCancellationToken: @unchecked Sendable {
         return cancelled
     }
 
+    /// The most recent user-visible operation. This is captured with a
+    /// cancellation so the caller can distinguish an interrupted upload from
+    /// a stop requested before a room or composer was ready.
+    public var currentActivityDescription: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return currentActivity
+    }
+
+    /// `true` once the current student's message or attachment might have
+    /// reached KakaoTalk. Retrying such an item automatically could duplicate
+    /// a notice, so callers should require a manual confirmation instead.
+    public var currentDeliveryMayHaveStarted: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return deliveryMayHaveStarted
+    }
+
+    /// Starts the activity record for one batch item. A token is reused for
+    /// the whole batch, so this also clears delivery state from the preceding
+    /// student without changing a pending cancellation request.
+    public func beginActivity(_ description: String?) {
+        lock.lock()
+        currentActivity = description
+        deliveryMayHaveStarted = false
+        lock.unlock()
+    }
+
+    public func setCurrentActivityDescription(
+        _ description: String?,
+        deliveryMayHaveStarted: Bool = false
+    ) {
+        lock.lock()
+        currentActivity = description
+        self.deliveryMayHaveStarted = self.deliveryMayHaveStarted || deliveryMayHaveStarted
+        lock.unlock()
+    }
+
     public func cancel() {
         lock.lock()
         cancelled = true
         lock.unlock()
+    }
+}
+
+/// A cached AX sheet can continue to expose its role after KakaoTalk has
+/// removed it from the live accessibility tree. A role on the cached object is
+/// therefore not proof that the preview is still shown.
+public enum KmsgAttachmentPreviewLiveness {
+    public static func isPreviewLive(
+        attachedToChatWindow: Bool,
+        containedInFocusedElementLineage: Bool,
+        discoverableAsTopLevelSurface: Bool
+    ) -> Bool {
+        attachedToChatWindow
+            || containedInFocusedElementLineage
+            || discoverableAsTopLevelSurface
     }
 }
 
@@ -212,6 +267,7 @@ public enum KmsgEmbeddedEngine {
         cancellationToken: KmsgCancellationToken?
     ) throws -> KmsgEmbeddedResult {
         try throwIfCancelled(cancellationToken)
+        cancellationToken?.setCurrentActivityDescription("채팅방 확인")
         let attachmentURLs = try validateAttachmentPaths(attachmentPaths)
         let kakao = try KakaoTalkApp()
         let runner = AXActionRunner(
@@ -310,6 +366,10 @@ public enum KmsgEmbeddedEngine {
 
         kakao.activate()
         for message in messages ?? [] {
+            cancellationToken?.setCurrentActivityDescription(
+                "메시지 전송 확인",
+                deliveryMayHaveStarted: true
+            )
             try throwIfCancelled(cancellationToken)
             guard runner.focusWithVerification(composer, label: "notice sender composer", attempts: 1) else {
                 try throwIfCancelled(cancellationToken)
@@ -388,6 +448,7 @@ public enum KmsgEmbeddedEngine {
         cancellationToken: KmsgCancellationToken?
     ) throws {
         let filename = fileURL.lastPathComponent
+        cancellationToken?.setCurrentActivityDescription("첨부파일 준비: \(filename)")
         guard let transcriptTable = transcriptTable(in: window) else {
             throw KmsgEmbeddedError.attachmentPreviewNotFound(filename)
         }
@@ -416,6 +477,7 @@ public enum KmsgEmbeddedEngine {
         runner.pressPaste()
         runner.log("attachment: pasted file URL '\(filename)'")
 
+        cancellationToken?.setCurrentActivityDescription("첨부파일 미리보기 확인: \(filename)")
         var previewSurface: UIElement?
         let previewFound = runner.waitUntil(
             label: "attachment preview \(filename)",
@@ -435,6 +497,10 @@ public enum KmsgEmbeddedEngine {
             throw KmsgEmbeddedError.attachmentPreviewNotFound(filename)
         }
 
+        cancellationToken?.setCurrentActivityDescription(
+            "첨부파일 전송 요청: \(filename)",
+            deliveryMayHaveStarted: true
+        )
         if let sendButton = attachmentSendButton(in: previewSurface) {
             if !runner.clickWithRetry(sendButton, label: "attachment send button", attempts: 2) {
                 // KakaoTalk can rebuild the top-level sheet between discovery
@@ -461,6 +527,10 @@ public enum KmsgEmbeddedEngine {
             runner.log("attachment: send button absent; sent Enter to active preview")
         }
 
+        cancellationToken?.setCurrentActivityDescription(
+            "첨부파일 업로드 완료 확인: \(filename)",
+            deliveryMayHaveStarted: true
+        )
         let completed = runner.waitUntil(
             label: "attachment upload completion \(filename)",
             timeout: attachmentUploadTimeout(for: fileURL),
@@ -618,21 +688,46 @@ public enum KmsgEmbeddedEngine {
         window: UIElement,
         application: UIElement
     ) -> Bool {
-        guard preview.role != nil else { return false }
-        if let sheets: [AXUIElement] = window.attributeOptional(kAXSheetsAttribute),
-           sheets.contains(where: { CFEqual($0, preview.axElement) }) {
-            return true
+        let attachedToChatWindow: Bool
+        if let sheets: [AXUIElement] = window.attributeOptional(kAXSheetsAttribute) {
+            attachedToChatWindow = sheets.contains { CFEqual($0, preview.axElement) }
+        } else {
+            attachedToChatWindow = false
         }
+
+        var containedInFocusedElementLineage = false
         if let focused = application.focusedUIElement {
             var cursor: UIElement? = focused
             var hops = 0
             while let current = cursor, hops < 12 {
-                if CFEqual(current.axElement, preview.axElement) { return true }
+                if CFEqual(current.axElement, preview.axElement) {
+                    containedInFocusedElementLineage = true
+                    break
+                }
                 cursor = current.parent
                 hops += 1
             }
         }
-        return preview.role == kAXSheetRole || preview.role == "AXDialog"
+
+        // A top-level preview sheet is not always exposed through
+        // window.AXSheets. Ask the current app tree for the same element only
+        // if the fast window/focus checks did not find it. Do not use
+        // preview.role here: detached AX objects may retain AXSheet/AXDialog.
+        let discoverableAsTopLevelSurface: Bool
+        if attachedToChatWindow || containedInFocusedElementLineage {
+            discoverableAsTopLevelSurface = false
+        } else {
+            discoverableAsTopLevelSurface = application.findAll(where: { element in
+                element.role == kAXSheetRole || element.role == "AXDialog"
+            }, limit: 6, maxNodes: 600).contains {
+                CFEqual($0.axElement, preview.axElement)
+            }
+        }
+        return KmsgAttachmentPreviewLiveness.isPreviewLive(
+            attachedToChatWindow: attachedToChatWindow,
+            containedInFocusedElementLineage: containedInFocusedElementLineage,
+            discoverableAsTopLevelSurface: discoverableAsTopLevelSurface
+        )
     }
 
     private static func attachmentTranscriptEntryIsComplete(

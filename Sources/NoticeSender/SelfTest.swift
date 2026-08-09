@@ -106,10 +106,21 @@ enum SelfTest {
             BatchRunPolicy.shouldProcess(status: .sent, dryRun: true)
                 && !BatchRunPolicy.shouldProcess(status: .sent, dryRun: false)
                 && BatchRunPolicy.shouldProcess(status: .verified, dryRun: false)
+                && !BatchRunPolicy.shouldProcess(status: .uncertain, dryRun: false)
                 && BatchRunPolicy.statusAfterSuccess(previousStatus: .sent, dryRun: true) == .sent
                 && BatchRunPolicy.statusAfterSuccess(previousStatus: .verified, dryRun: false) == .sent
                 && BatchRunPolicy.statusAfterFailure(previousStatus: .sent, dryRun: true) == .sent
                 && BatchRunPolicy.statusAfterFailure(previousStatus: .verified, dryRun: true) == .failed
+                && BatchRunPolicy.statusAfterCancellation(
+                    previousStatus: .ready,
+                    dryRun: false,
+                    deliveryMayHaveStarted: true
+                ) == .uncertain
+                && BatchRunPolicy.statusAfterCancellation(
+                    previousStatus: .ready,
+                    dryRun: false,
+                    deliveryMayHaveStarted: false
+                ) == .failed
         }
         check("발송 전 일시 오류만 1회 안전 복구", failures: &failures) {
             let retryable = [
@@ -139,6 +150,35 @@ enum SelfTest {
                 && unsafeToRetry.allSatisfy {
                     !KmsgPreSendRecoveryPolicy.shouldRetryResolution(after: $0, attempt: 1)
                 }
+        }
+        check("닫힌 첨부 미리보기 AX 객체를 열림으로 오인하지 않음", failures: &failures) {
+            !KmsgAttachmentPreviewLiveness.isPreviewLive(
+                attachedToChatWindow: false,
+                containedInFocusedElementLineage: false,
+                discoverableAsTopLevelSurface: false
+            )
+                && KmsgAttachmentPreviewLiveness.isPreviewLive(
+                    attachedToChatWindow: true,
+                    containedInFocusedElementLineage: false,
+                    discoverableAsTopLevelSurface: false
+                )
+                && KmsgAttachmentPreviewLiveness.isPreviewLive(
+                    attachedToChatWindow: false,
+                    containedInFocusedElementLineage: false,
+                    discoverableAsTopLevelSurface: true
+                )
+        }
+        check("중지 토큰이 마지막 첨부 단계를 보존", failures: &failures) {
+            let token = KmsgCancellationToken()
+            token.beginActivity("채팅방 확인")
+            token.setCurrentActivityDescription(
+                "첨부파일 업로드 완료 확인: report.pdf",
+                deliveryMayHaveStarted: true
+            )
+            token.cancel()
+            return token.isCancelled
+                && token.currentActivityDescription == "첨부파일 업로드 완료 확인: report.pdf"
+                && token.currentDeliveryMayHaveStarted
         }
         check("모의고사 3개", failures: &failures) {
             var input = sampleInput(homework: nil, homeworkMax: nil, test: nil, testMax: nil)
