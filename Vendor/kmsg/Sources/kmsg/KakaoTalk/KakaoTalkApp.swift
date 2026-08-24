@@ -317,9 +317,12 @@ public final class KakaoTalkApp: Sendable {
         var shouldUseShortcutFallback = chatroomsButton == nil
         if let chatroomsButton {
             do {
+                let wasSelected: Bool? = chatroomsButton.attributeOptional(kAXSelectedAttribute)
                 try chatroomsButton.press()
                 trace?("chats: pressed chatrooms navigation button")
-                Thread.sleep(forTimeInterval: max(0.05, settleDelay))
+                if wasSelected != true {
+                    Thread.sleep(forTimeInterval: max(0.05, settleDelay))
+                }
                 let selected: Bool? = chatroomsButton.attributeOptional(kAXSelectedAttribute)
                 if selected == false {
                     trace?("chats: chatrooms navigation button did not become selected; using Command-2 fallback")

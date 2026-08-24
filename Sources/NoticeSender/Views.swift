@@ -1172,6 +1172,7 @@ struct LessonManagementView: View {
     @State private var lessonAttachmentScannedFileCount = 0
     @State private var isScanningLessonAttachments = false
     @State private var lessonAttachmentRefreshRevision = 0
+    @State private var lessonAttachmentScanRequested = false
     @State private var lessonAttachmentScanError: String?
     @State private var pendingLessonBatch: SendBatch?
     @State private var showingLessonAttachmentConfirmation = false
@@ -1285,8 +1286,7 @@ struct LessonManagementView: View {
     }
 
     private var lessonAttachmentScanKey: String {
-        let root = (store.database.attachmentRootPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return ([root, String(lessonAttachmentRefreshRevision)] + previewRows.map { $0.studentID.uuidString }).joined(separator: "|")
+        String(lessonAttachmentRefreshRevision)
     }
 
     private var lessonAttachmentCount: Int {
@@ -1482,18 +1482,22 @@ struct LessonManagementView: View {
                 HStack {
                     TextField("저장매체의 루트 폴더 주소", text: Binding(
                         get: { store.database.attachmentRootPath ?? "" },
-                        set: { store.setAttachmentRootPath($0) }
+                        set: { setLessonAttachmentRootPath($0) }
                     ))
                     .textFieldStyle(.roundedBorder)
                     .disabled(kakao.isBusy || isPreparingSend)
                     Button("폴더 선택…") { chooseLessonAttachmentFolder() }
                         .disabled(kakao.isBusy || isPreparingSend)
                     Button(isScanningLessonAttachments ? "스캔 중…" : "최대 3단계 파일 스캔") {
-                        lessonAttachmentRefreshRevision &+= 1
+                        requestLessonAttachmentScan()
                     }
                     .disabled(previewRows.isEmpty || isScanningLessonAttachments || kakao.isBusy || isPreparingSend)
+                    Button("주소 지우기", role: .destructive) {
+                        setLessonAttachmentRootPath("")
+                    }
+                    .disabled((store.database.attachmentRootPath ?? "").isEmpty || kakao.isBusy || isPreparingSend)
                 }
-                Text("선택 폴더를 깊이 0으로 보고 최대 깊이 3까지 확인합니다. 파일명에 학교, 학번(예: 25 또는 2025), 학생 DB의 전체 이름(예: 홍길동)이 모두 포함된 모든 일반 파일을 학생별로 연결합니다. 호칭(예: 길동이)은 첨부파일 매칭에 사용하지 않습니다.")
+                Text("주소를 수정하거나 지워도 파일을 읽지 않습니다. 새 주소는 파일 스캔을 눌러 확인하세요. 선택 폴더를 깊이 0으로 보고 최대 깊이 3까지 확인합니다. 파일명에 학교, 학번(예: 25 또는 2025), 학생 DB의 전체 이름(예: 홍길동)이 모두 포함된 모든 일반 파일을 학생별로 연결합니다. 호칭(예: 길동이)은 첨부파일 매칭에 사용하지 않습니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }.padding(6)
@@ -1603,9 +1607,27 @@ struct LessonManagementView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
         if panel.runModal() == .OK, let path = panel.url?.path {
-            store.setAttachmentRootPath(path)
+            setLessonAttachmentRootPath(path)
+            requestLessonAttachmentScan()
         }
+    }
+
+    private func setLessonAttachmentRootPath(_ path: String) {
+        guard store.database.attachmentRootPath != path else { return }
+        store.setAttachmentRootPath(path)
+        lessonAttachmentPaths = [:]
+        lessonAttachmentScannedFileCount = 0
+        lessonAttachmentScanError = nil
+        isScanningLessonAttachments = false
+        lessonAttachmentScanRequested = false
+        lessonAttachmentRefreshRevision &+= 1
+    }
+
+    private func requestLessonAttachmentScan() {
+        lessonAttachmentScanRequested = true
+        lessonAttachmentRefreshRevision &+= 1
     }
 
     private var performanceGrid: some View {
@@ -1837,6 +1859,7 @@ struct LessonManagementView: View {
     }
 
     private func scanLessonAttachmentsForPreview() async {
+        guard lessonAttachmentScanRequested else { return }
         let root = (store.database.attachmentRootPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !root.isEmpty else {
             lessonAttachmentPaths = [:]

@@ -342,7 +342,7 @@ public enum KmsgEmbeddedEngine {
             // leave the window open. Closing an uploading window can cancel the
             // transfer or cause KakaoTalk to present a separate warning.
             if resolution.openedTransiently, mayCloseTransientWindow {
-                _ = resolver.closeWindowAndPrepareNext(resolution.window)
+                _ = resolver.closeWindow(resolution.window)
             }
         }
         try throwIfCancelled(cancellationToken)

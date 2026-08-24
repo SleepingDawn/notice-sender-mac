@@ -845,6 +845,18 @@ enum SelfTest {
             let result = try AttachmentScanner.scan(rootPath: root.path, students: [student])
             return result.scannedFileCount == 3 && result.filesByStudentID[student.id]?.count == 2
         }
+        check("없는 첨부 폴더는 즉시 오류로 처리", failures: &failures) {
+            let missing = FileManager.default.temporaryDirectory
+                .appendingPathComponent("notice-sender-missing-attachment-\(UUID().uuidString)")
+            do {
+                _ = try AttachmentScanner.scan(rootPath: missing.path, students: [])
+                return false
+            } catch AttachmentScannerError.notDirectory {
+                return true
+            } catch {
+                return false
+            }
+        }
         check("첨부파일은 호칭 대신 학생 DB 전체 이름으로만 매칭", failures: &failures) {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-full-name-attachment-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
