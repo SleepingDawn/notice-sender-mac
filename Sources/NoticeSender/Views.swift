@@ -391,16 +391,14 @@ struct StudentEditor: View {
     @State private var value: Student
     @State private var admissionYearText: String
     @State private var nicknameWasManuallyEdited: Bool
-    let title: String
     let onSave: (Student) -> Void
-    init(student: Student?, title: String = "학생 정보", onSave: @escaping (Student) -> Void) {
+    init(student: Student?, onSave: @escaping (Student) -> Void) {
         var initial = student ?? Student(name: "", nickname: "", school: "", admissionYear: Calendar.current.component(.year, from: .now) % 100, chatRoomName: "")
         let generatedNickname = NicknameGenerator.generate(from: initial.name)
         initial.nickname = NicknameGenerator.resolved(name: initial.name, enteredNickname: initial.nickname)
         _value = State(initialValue: initial)
         _admissionYearText = State(initialValue: AdmissionYearPolicy.formatted(initial.admissionYear))
         _nicknameWasManuallyEdited = State(initialValue: student != nil && initial.nickname != generatedNickname)
-        self.title = title
         self.onSave = onSave
     }
     private var admissionYear: Int? { AdmissionYearPolicy.parseTwoDigit(admissionYearText) }
@@ -415,7 +413,7 @@ struct StudentEditor: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.title2.bold())
+            Text("학생 정보").font(.title2.bold())
             Form {
                 TextField("이름", text: $value.name)
                 HStack {
@@ -482,7 +480,6 @@ struct ClassesView: View {
     @State private var deletionRequest: ClassDeletionRequest?
     @State private var showingRenameClass = false
     @State private var renameClassText = ""
-    @State private var showingTemporaryStudentEditor = false
 
     var body: some View {
         InitialRatioSplitView(
@@ -547,7 +544,7 @@ struct ClassesView: View {
                                     Text("\(index + 1)").frame(width: 35, alignment: .trailing).foregroundStyle(.secondary)
                                     Text(student.name).frame(width: 100, alignment: .leading)
                                     Text(member.nicknameOverride?.isEmpty == false ? member.nicknameOverride! : student.nickname).frame(width: 100, alignment: .leading)
-                                    if store.isTemporaryStudent(id: student.id, inClassID: group.id) {
+                                    if store.isTemporaryMember(id: student.id, inClassID: group.id) {
                                         Text("임시").font(.caption).foregroundStyle(.orange)
                                     }
                                     Text(student.chatRoomName).foregroundStyle(.secondary)
@@ -560,11 +557,6 @@ struct ClassesView: View {
                     }
                     .frame(minHeight: 260, maxHeight: .infinity)
                     Divider()
-                    HStack {
-                        Text("임시 학생은 앱을 종료하면 자동으로 사라집니다.").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("임시 학생 추가") { showingTemporaryStudentEditor = true }
-                    }
                     Text("학생 추가").font(.headline)
                     TextField("이름·학교·학번 검색", text: $studentSearch).textFieldStyle(.roundedBorder)
                     HStack {
@@ -587,6 +579,9 @@ struct ClassesView: View {
                     .frame(height: 190)
                     HStack {
                         Spacer()
+                        Button("선택 학생 \(selectedStudents.count)명 임시 추가") { addTemporarySelected(group) }
+                            .help("선택한 기존 학생을 앱을 종료하면 사라지는 임시 반 멤버로 추가합니다.")
+                            .disabled(selectedStudents.isEmpty)
                         Button("선택 학생 \(selectedStudents.count)명 추가") { addSelected(group) }
                             .buttonStyle(.borderedProminent)
                             .disabled(selectedStudents.isEmpty)
@@ -602,14 +597,6 @@ struct ClassesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: selectedID) { _, _ in selectedStudents.removeAll() }
         .sheet(isPresented: $creating) { ClassCreator { name, school, year, ids in store.createClass(name: name, school: school, year: year, studentIDs: ids); creating = false } }
-        .sheet(isPresented: $showingTemporaryStudentEditor) {
-            if let classID = selectedID {
-                StudentEditor(student: nil, title: "임시 학생 추가") {
-                    store.addTemporaryStudent($0, toClassID: classID)
-                    showingTemporaryStudentEditor = false
-                }
-            }
-        }
         .alert("반 이름 편집", isPresented: $showingRenameClass) {
             TextField("반 이름", text: $renameClassText)
             Button("취소", role: .cancel) { }
@@ -703,16 +690,25 @@ struct ClassesView: View {
 
     private func addSelected(_ group: ClassGroup) {
         guard var copy = store.database.classes.first(where: { $0.id == group.id }) else { return }
-        let orderedIDs = store.database.students
-            .filter { selectedStudents.contains($0.id) }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-            .map(\.id)
-        copy.members.append(contentsOf: orderedIDs.map { ClassMember(studentID: $0) })
+        copy.members.append(contentsOf: selectedStudentIDs.map { ClassMember(studentID: $0) })
         store.updateClass(copy)
         selectedStudents.removeAll()
     }
+
+    private func addTemporarySelected(_ group: ClassGroup) {
+        store.addTemporaryMembers(studentIDs: selectedStudentIDs, toClassID: group.id)
+        selectedStudents.removeAll()
+    }
+
+    private var selectedStudentIDs: [UUID] {
+        store.database.students
+            .filter { selectedStudents.contains($0.id) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            .map(\.id)
+    }
+
     private func remove(_ group: ClassGroup, _ id: UUID) {
-        if store.removeTemporaryStudent(id: id, fromClassID: group.id) { return }
+        if store.removeTemporaryMember(id: id, fromClassID: group.id) { return }
         guard var copy = store.database.classes.first(where: { $0.id == group.id }) else { return }
         copy.members.removeAll { $0.studentID == id }
         store.updateClass(copy)
@@ -1962,7 +1958,7 @@ struct LessonManagementView: View {
             presetVersion: preset.version
         )
         let batch = SendBatch(metadata: metadata, items: items)
-        issues.append(contentsOf: BatchParser.validate(batch: batch, database: store.runtimeDatabase, allowEmptyMessages: allowEmptyMessages))
+        issues.append(contentsOf: BatchParser.validate(batch: batch, database: store.database, allowEmptyMessages: allowEmptyMessages))
         return (batch, issues)
     }
 
@@ -2010,7 +2006,7 @@ struct LessonManagementView: View {
                     isPreparingSend = false
                     return
                 }
-                let issues = BatchParser.validate(batch: batch, database: store.runtimeDatabase, allowEmptyMessages: operationDryRun)
+                let issues = BatchParser.validate(batch: batch, database: store.database, allowEmptyMessages: operationDryRun)
                 store.currentBatch = batch
                 store.validationIssues = issues
                 guard !issues.contains(where: { $0.severity == .error }) else {

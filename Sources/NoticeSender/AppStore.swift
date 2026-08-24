@@ -11,7 +11,7 @@ final class AppStore: ObservableObject {
     @Published var validationIssues: [ValidationIssue] = []
     @Published var banner: String?
     @Published var isSyncingStudentsFromKakao = false
-    @Published private var temporaryStudentsByClassID: [UUID: [Student]] = [:]
+    @Published private var temporaryMembersByClassID: [UUID: [ClassMember]] = [:]
 
     private let databaseURL: URL
     private let encoder: JSONEncoder
@@ -161,7 +161,7 @@ final class AppStore: ObservableObject {
     func updateClass(_ group: ClassGroup) {
         guard let index = database.classes.firstIndex(where: { $0.id == group.id }) else { return }
         var changed = group
-        let temporaryStudentIDs = Set((temporaryStudentsByClassID[group.id] ?? []).map(\.id))
+        let temporaryStudentIDs = Set((temporaryMembersByClassID[group.id] ?? []).map(\.studentID))
         changed.members.removeAll { temporaryStudentIDs.contains($0.studentID) }
         changed.members = ClassMemberSorter.sorted(changed.members, students: database.students)
         database.classes[index] = changed
@@ -196,7 +196,7 @@ final class AppStore: ObservableObject {
 
     func deleteClass(id: UUID) {
         database.classes.removeAll { $0.id == id }
-        temporaryStudentsByClassID[id] = nil
+        temporaryMembersByClassID[id] = nil
         if selectedClassID == id { selectedClassID = nil }
         if currentBatch?.metadata.classID == id {
             currentBatch = nil
@@ -207,7 +207,7 @@ final class AppStore: ObservableObject {
 
     func deleteAllClasses() {
         database.classes.removeAll()
-        temporaryStudentsByClassID = [:]
+        temporaryMembersByClassID = [:]
         selectedClassID = nil
         currentBatch = nil
         validationIssues = []
@@ -294,7 +294,7 @@ final class AppStore: ObservableObject {
 
         currentBatch = nil
         validationIssues = []
-        temporaryStudentsByClassID = [:]
+        temporaryMembersByClassID = [:]
         save()
         return ClassArchiveImportSummary(
             addedStudents: addedStudents,
@@ -444,51 +444,37 @@ final class AppStore: ObservableObject {
         save()
     }
 
-    func addTemporaryStudent(_ student: Student, toClassID classID: UUID) {
-        guard database.classes.contains(where: { $0.id == classID }) else {
+    func addTemporaryMembers(studentIDs: [UUID], toClassID classID: UUID) {
+        guard let group = database.classes.first(where: { $0.id == classID }) else {
             banner = "임시 학생을 추가할 반을 찾을 수 없습니다."
             return
         }
-        guard AdmissionYearPolicy.isValid(student.admissionYear) else {
-            banner = "학번은 00부터 99까지의 두 자리 숫자여야 합니다."
-            return
-        }
-        var temporary = student
-        temporary.nickname = NicknameGenerator.resolved(name: temporary.name, enteredNickname: temporary.nickname)
-        temporaryStudentsByClassID[classID, default: []].append(temporary)
+        let existingIDs = Set(group.members.map(\.studentID) + (temporaryMembersByClassID[classID] ?? []).map(\.studentID))
+        let members = studentIDs
+            .filter { id in !existingIDs.contains(id) && database.students.contains(where: { $0.id == id }) }
+            .map { ClassMember(studentID: $0) }
+        temporaryMembersByClassID[classID, default: []].append(contentsOf: members)
     }
 
     @discardableResult
-    func removeTemporaryStudent(id: UUID, fromClassID classID: UUID) -> Bool {
-        guard var students = temporaryStudentsByClassID[classID],
-              let index = students.firstIndex(where: { $0.id == id })
+    func removeTemporaryMember(id: UUID, fromClassID classID: UUID) -> Bool {
+        guard var members = temporaryMembersByClassID[classID],
+              let index = members.firstIndex(where: { $0.studentID == id })
         else { return false }
-        students.remove(at: index)
-        temporaryStudentsByClassID[classID] = students.isEmpty ? nil : students
+        members.remove(at: index)
+        temporaryMembersByClassID[classID] = members.isEmpty ? nil : members
         return true
     }
 
-    func isTemporaryStudent(id: UUID, inClassID classID: UUID) -> Bool {
-        temporaryStudentsByClassID[classID]?.contains(where: { $0.id == id }) == true
+    func isTemporaryMember(id: UUID, inClassID classID: UUID) -> Bool {
+        temporaryMembersByClassID[classID]?.contains(where: { $0.studentID == id }) == true
     }
 
-    var runtimeDatabase: AppDatabase {
-        var runtime = database
-        runtime.students.append(contentsOf: temporaryStudentsByClassID.values.flatMap { $0 })
-        for index in runtime.classes.indices {
-            runtime.classes[index].members.append(contentsOf: (temporaryStudentsByClassID[runtime.classes[index].id] ?? []).map { ClassMember(studentID: $0.id) })
-        }
-        return runtime
-    }
-
-    func student(id: UUID) -> Student? {
-        database.students.first { $0.id == id }
-            ?? temporaryStudentsByClassID.values.flatMap { $0 }.first { $0.id == id }
-    }
+    func student(id: UUID) -> Student? { database.students.first { $0.id == id } }
 
     func group(id: UUID?) -> ClassGroup? {
         guard let id, var group = database.classes.first(where: { $0.id == id }) else { return nil }
-        group.members.append(contentsOf: (temporaryStudentsByClassID[id] ?? []).map { ClassMember(studentID: $0.id) })
+        group.members.append(contentsOf: temporaryMembersByClassID[id] ?? [])
         return group
     }
 
@@ -631,7 +617,7 @@ final class AppStore: ObservableObject {
         database = try decoder.decode(AppDatabase.self, from: Data(contentsOf: url))
         database.operatingAdmissionYears = AdmissionYearPolicy.allYears
         database.schemaVersion = max(database.schemaVersion, 8)
-        temporaryStudentsByClassID = [:]
+        temporaryMembersByClassID = [:]
         currentBatch = nil
         validationIssues = []
         save()

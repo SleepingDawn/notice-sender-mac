@@ -377,24 +377,24 @@ enum SelfTest {
             let temporaryFirst = Student(name: "임시첫째", nickname: "첫째", school: "한성", admissionYear: 25, chatRoomName: "첫째방")
             let temporarySecond = Student(name: "임시둘째", nickname: "둘째", school: "한성", admissionYear: 25, chatRoomName: "둘째방")
             let store = AppStore(databaseURL: root.appendingPathComponent("database.json"))
-            store.database = AppDatabase(students: [studentB, studentA], presets: DefaultPresets.all)
+            store.database = AppDatabase(students: [studentB, studentA, temporaryFirst, temporarySecond], presets: DefaultPresets.all)
             store.createClass(name: "한성25", school: "한성", year: 25, studentIDs: [studentB.id, studentA.id])
             guard let classID = store.database.classes.first?.id else { return false }
-            store.addTemporaryStudent(temporaryFirst, toClassID: classID)
-            store.addTemporaryStudent(temporarySecond, toClassID: classID)
+            store.addTemporaryMembers(studentIDs: [temporaryFirst.id], toClassID: classID)
+            store.addTemporaryMembers(studentIDs: [temporarySecond.id], toClassID: classID)
             let names = store.group(id: classID)?.members.compactMap { store.student(id: $0.studentID)?.name }
             let runtimeBatch = SendBatch(
                 metadata: BatchMetadata(schemaVersion: 0, classID: classID, sessionID: UUID(), date: "7월 12일", presetID: UUID(), presetVersion: 0, isLegacy: true),
                 items: [BatchItem(studentID: temporaryFirst.id, studentName: temporaryFirst.name, nickname: temporaryFirst.nickname, chatRoomName: temporaryFirst.chatRoomName, message: "공지")]
             )
-            let isSendable = !BatchParser.validate(batch: runtimeBatch, database: store.runtimeDatabase).contains { $0.severity == .error }
+            let isSendable = !BatchParser.validate(batch: runtimeBatch, database: store.database).contains { $0.severity == .error }
             let restartedStore = AppStore(databaseURL: root.appendingPathComponent("database.json"))
             return names == ["김길동", "박하연", "임시첫째", "임시둘째"]
-                && store.database.students.count == 2
+                && store.database.students.count == 4
                 && store.database.classes.first?.members.count == 2
                 && isSendable
                 && restartedStore.group(id: classID)?.members.count == 2
-                && restartedStore.database.students.count == 2
+                && restartedStore.database.students.count == 4
         }
         check("반 이름·명단 변경 시 ID·Preset 유지", failures: &failures) {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-class-rename-\(UUID().uuidString)", isDirectory: true)

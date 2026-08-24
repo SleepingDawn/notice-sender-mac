@@ -213,7 +213,7 @@ final class KakaoAutomationService: ObservableObject {
             }
             isBusy = false
         }
-        let runtimeIssues = BatchParser.validate(batch: batch, database: store.runtimeDatabase, allowEmptyMessages: dryRun)
+        let runtimeIssues = BatchParser.validate(batch: batch, database: store.database, allowEmptyMessages: dryRun)
         store.validationIssues = runtimeIssues
         guard !runtimeIssues.contains(where: { $0.severity == .error }) else {
             statusText = "검증 오류가 있어 전송하지 않았습니다."
