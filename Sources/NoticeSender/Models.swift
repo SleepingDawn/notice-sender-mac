@@ -116,7 +116,6 @@ struct ClassGroup: Codable, Identifiable, Hashable, Sendable {
     var admissionYear: Int
     var members: [ClassMember] = []
     var defaultPresetID: UUID?
-    var version: Int = 1
 }
 
 enum ClassMemberSorter {

@@ -369,12 +369,39 @@ enum SelfTest {
             let namesByID = Dictionary(uniqueKeysWithValues: [studentC, studentA, studentB].map { ($0.id, $0.name) })
             return sorted.compactMap { namesByID[$0.studentID] } == ["김길동", "박하연", "이민준"]
         }
-        check("반 이름 편집 시 ID·명단·Preset 유지", failures: &failures) {
+        check("임시 반 학생은 추가 순서로 표시되고 재실행 시 사라짐", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-temporary-students-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let studentB = Student(name: "박하연", nickname: "하연이", school: "한성", admissionYear: 25, chatRoomName: "하연방")
+            let studentA = Student(name: "김길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "길동방")
+            let temporaryFirst = Student(name: "임시첫째", nickname: "첫째", school: "한성", admissionYear: 25, chatRoomName: "첫째방")
+            let temporarySecond = Student(name: "임시둘째", nickname: "둘째", school: "한성", admissionYear: 25, chatRoomName: "둘째방")
+            let store = AppStore(databaseURL: root.appendingPathComponent("database.json"))
+            store.database = AppDatabase(students: [studentB, studentA], presets: DefaultPresets.all)
+            store.createClass(name: "한성25", school: "한성", year: 25, studentIDs: [studentB.id, studentA.id])
+            guard let classID = store.database.classes.first?.id else { return false }
+            store.addTemporaryStudent(temporaryFirst, toClassID: classID)
+            store.addTemporaryStudent(temporarySecond, toClassID: classID)
+            let names = store.group(id: classID)?.members.compactMap { store.student(id: $0.studentID)?.name }
+            let runtimeBatch = SendBatch(
+                metadata: BatchMetadata(schemaVersion: 0, classID: classID, sessionID: UUID(), date: "7월 12일", presetID: UUID(), presetVersion: 0, isLegacy: true),
+                items: [BatchItem(studentID: temporaryFirst.id, studentName: temporaryFirst.name, nickname: temporaryFirst.nickname, chatRoomName: temporaryFirst.chatRoomName, message: "공지")]
+            )
+            let isSendable = !BatchParser.validate(batch: runtimeBatch, database: store.runtimeDatabase).contains { $0.severity == .error }
+            let restartedStore = AppStore(databaseURL: root.appendingPathComponent("database.json"))
+            return names == ["김길동", "박하연", "임시첫째", "임시둘째"]
+                && store.database.students.count == 2
+                && store.database.classes.first?.members.count == 2
+                && isSendable
+                && restartedStore.group(id: classID)?.members.count == 2
+                && restartedStore.database.students.count == 2
+        }
+        check("반 이름·명단 변경 시 ID·Preset 유지", failures: &failures) {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-class-rename-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: root) }
             let student = Student(name: "김길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "길동방")
-            let group = ClassGroup(name: "변경 전", school: "한성", admissionYear: 25, members: [ClassMember(studentID: student.id)], defaultPresetID: DefaultPresets.direct.id, version: 3)
+            let group = ClassGroup(name: "변경 전", school: "한성", admissionYear: 25, members: [ClassMember(studentID: student.id)], defaultPresetID: DefaultPresets.direct.id)
             let other = ClassGroup(name: "기존 반", school: "세종", admissionYear: 26)
             let store = AppStore(databaseURL: root.appendingPathComponent("database.json"))
             store.database = AppDatabase(students: [student], classes: [group, other], presets: DefaultPresets.all)
@@ -382,15 +409,25 @@ enum SelfTest {
             guard let result = store.group(id: group.id) else { return false }
             let duplicateRejected = !store.renameClass(id: group.id, to: other.name)
             let emptyRejected = !store.renameClass(id: group.id, to: "  \n ")
+            var memberChanged = result
+            memberChanged.members = []
+            store.updateClass(memberChanged)
             return renamed
                 && result.name == "변경 후"
                 && result.id == group.id
                 && result.members == group.members
                 && result.defaultPresetID == group.defaultPresetID
-                && result.version == 4
                 && duplicateRejected
                 && emptyRejected
                 && store.group(id: group.id)?.name == "변경 후"
+                && store.group(id: group.id)?.members.isEmpty == true
+        }
+        check("기존 반 version 필드는 무시", failures: &failures) {
+            let id = UUID()
+            let json = """
+            {"id":"\(id.uuidString)","name":"기존 반","school":"한성","admissionYear":25,"members":[],"defaultPresetID":null,"version":9}
+            """
+            return (try? JSONDecoder().decode(ClassGroup.self, from: Data(json.utf8)))?.id == id
         }
         check("반 관리 기본 분할 비율 3대7", failures: &failures) {
             let totalWidth = CGFloat(1_000)
@@ -945,7 +982,7 @@ enum SelfTest {
                 BatchItem(studentID: students[2].id, studentName: students[2].name, nickname: students[2].nickname, chatRoomName: students[2].chatRoomName, message: "공지", attachmentPaths: []),
             ]
             return AttachmentDeliveryNotice.preview(studentName: students[0].name, paths: items[0].attachmentPaths ?? []) == "윤서진A 학생에게 2개 파일이 전송됩니다."
-                && AttachmentDeliveryNotice.confirmation(in: items) == "[윤서진A, 윤서진B]에게 파일이 함께 발송됩니다."
+                && AttachmentDeliveryNotice.confirmation(in: items) == "[윤서진A, 윤서진B] 총 2명에게 파일이 함께 발송됩니다."
         }
         check("공통 메시지 체크·빈 문자열 사용 규칙", failures: &failures) {
             let message = "  공통 안내입니다.\n다음 줄  "

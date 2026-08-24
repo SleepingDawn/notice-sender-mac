@@ -122,6 +122,6 @@ enum AttachmentDeliveryNotice {
     static func confirmation(in items: [BatchItem]) -> String? {
         let names = matchedStudentNames(in: items)
         guard !names.isEmpty else { return nil }
-        return "[\(names.joined(separator: ", "))]에게 파일이 함께 발송됩니다."
+        return "[\(names.joined(separator: ", "))] 총 \(names.count)명에게 파일이 함께 발송됩니다."
     }
 }

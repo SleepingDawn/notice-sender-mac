@@ -11,6 +11,7 @@ final class AppStore: ObservableObject {
     @Published var validationIssues: [ValidationIssue] = []
     @Published var banner: String?
     @Published var isSyncingStudentsFromKakao = false
+    @Published private var temporaryStudentsByClassID: [UUID: [Student]] = [:]
 
     private let databaseURL: URL
     private let encoder: JSONEncoder
@@ -137,11 +138,7 @@ final class AppStore: ObservableObject {
         guard !ids.isEmpty else { return }
         database.students.removeAll { ids.contains($0.id) }
         for index in database.classes.indices {
-            let previousCount = database.classes[index].members.count
             database.classes[index].members.removeAll { ids.contains($0.studentID) }
-            if database.classes[index].members.count != previousCount {
-                database.classes[index].version += 1
-            }
         }
         if currentBatch?.items.contains(where: { ids.contains($0.studentID) }) == true {
             currentBatch = nil
@@ -164,8 +161,9 @@ final class AppStore: ObservableObject {
     func updateClass(_ group: ClassGroup) {
         guard let index = database.classes.firstIndex(where: { $0.id == group.id }) else { return }
         var changed = group
+        let temporaryStudentIDs = Set((temporaryStudentsByClassID[group.id] ?? []).map(\.id))
+        changed.members.removeAll { temporaryStudentIDs.contains($0.studentID) }
         changed.members = ClassMemberSorter.sorted(changed.members, students: database.students)
-        changed.version = database.classes[index].version + 1
         database.classes[index] = changed
         save()
     }
@@ -198,6 +196,7 @@ final class AppStore: ObservableObject {
 
     func deleteClass(id: UUID) {
         database.classes.removeAll { $0.id == id }
+        temporaryStudentsByClassID[id] = nil
         if selectedClassID == id { selectedClassID = nil }
         if currentBatch?.metadata.classID == id {
             currentBatch = nil
@@ -208,6 +207,7 @@ final class AppStore: ObservableObject {
 
     func deleteAllClasses() {
         database.classes.removeAll()
+        temporaryStudentsByClassID = [:]
         selectedClassID = nil
         currentBatch = nil
         validationIssues = []
@@ -284,11 +284,9 @@ final class AppStore: ObservableObject {
                 ?? (identityMatches.count == 1 ? identityMatches.first : nil)
             if let targetIndex {
                 mapped.id = database.classes[targetIndex].id
-                mapped.version = max(database.classes[targetIndex].version, archivedClass.version) + 1
                 database.classes[targetIndex] = mapped
                 updatedClasses += 1
             } else {
-                mapped.version = max(1, archivedClass.version)
                 database.classes.append(mapped)
                 addedClasses += 1
             }
@@ -296,6 +294,7 @@ final class AppStore: ObservableObject {
 
         currentBatch = nil
         validationIssues = []
+        temporaryStudentsByClassID = [:]
         save()
         return ClassArchiveImportSummary(
             addedStudents: addedStudents,
@@ -379,7 +378,6 @@ final class AppStore: ObservableObject {
         let fallback = database.presets.first(where: { $0.kind == .direct }) ?? database.presets[0]
         for index in database.classes.indices where database.classes[index].defaultPresetID == id {
             database.classes[index].defaultPresetID = fallback.id
-            database.classes[index].version += 1
         }
         if var plans = database.lessonPlans {
             for index in plans.indices where plans[index].presetID == id {
@@ -446,8 +444,53 @@ final class AppStore: ObservableObject {
         save()
     }
 
-    func student(id: UUID) -> Student? { database.students.first { $0.id == id } }
-    func group(id: UUID?) -> ClassGroup? { database.classes.first { $0.id == id } }
+    func addTemporaryStudent(_ student: Student, toClassID classID: UUID) {
+        guard database.classes.contains(where: { $0.id == classID }) else {
+            banner = "임시 학생을 추가할 반을 찾을 수 없습니다."
+            return
+        }
+        guard AdmissionYearPolicy.isValid(student.admissionYear) else {
+            banner = "학번은 00부터 99까지의 두 자리 숫자여야 합니다."
+            return
+        }
+        var temporary = student
+        temporary.nickname = NicknameGenerator.resolved(name: temporary.name, enteredNickname: temporary.nickname)
+        temporaryStudentsByClassID[classID, default: []].append(temporary)
+    }
+
+    @discardableResult
+    func removeTemporaryStudent(id: UUID, fromClassID classID: UUID) -> Bool {
+        guard var students = temporaryStudentsByClassID[classID],
+              let index = students.firstIndex(where: { $0.id == id })
+        else { return false }
+        students.remove(at: index)
+        temporaryStudentsByClassID[classID] = students.isEmpty ? nil : students
+        return true
+    }
+
+    func isTemporaryStudent(id: UUID, inClassID classID: UUID) -> Bool {
+        temporaryStudentsByClassID[classID]?.contains(where: { $0.id == id }) == true
+    }
+
+    var runtimeDatabase: AppDatabase {
+        var runtime = database
+        runtime.students.append(contentsOf: temporaryStudentsByClassID.values.flatMap { $0 })
+        for index in runtime.classes.indices {
+            runtime.classes[index].members.append(contentsOf: (temporaryStudentsByClassID[runtime.classes[index].id] ?? []).map { ClassMember(studentID: $0.id) })
+        }
+        return runtime
+    }
+
+    func student(id: UUID) -> Student? {
+        database.students.first { $0.id == id }
+            ?? temporaryStudentsByClassID.values.flatMap { $0 }.first { $0.id == id }
+    }
+
+    func group(id: UUID?) -> ClassGroup? {
+        guard let id, var group = database.classes.first(where: { $0.id == id }) else { return nil }
+        group.members.append(contentsOf: (temporaryStudentsByClassID[id] ?? []).map { ClassMember(studentID: $0.id) })
+        return group
+    }
 
     func duplicateStudents() -> [String: [Student]] {
         Dictionary(grouping: database.students, by: \.duplicateKey).filter { $0.value.count > 1 }
@@ -588,6 +631,7 @@ final class AppStore: ObservableObject {
         database = try decoder.decode(AppDatabase.self, from: Data(contentsOf: url))
         database.operatingAdmissionYears = AdmissionYearPolicy.allYears
         database.schemaVersion = max(database.schemaVersion, 8)
+        temporaryStudentsByClassID = [:]
         currentBatch = nil
         validationIssues = []
         save()

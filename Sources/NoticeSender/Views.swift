@@ -391,14 +391,16 @@ struct StudentEditor: View {
     @State private var value: Student
     @State private var admissionYearText: String
     @State private var nicknameWasManuallyEdited: Bool
+    let title: String
     let onSave: (Student) -> Void
-    init(student: Student?, onSave: @escaping (Student) -> Void) {
+    init(student: Student?, title: String = "학생 정보", onSave: @escaping (Student) -> Void) {
         var initial = student ?? Student(name: "", nickname: "", school: "", admissionYear: Calendar.current.component(.year, from: .now) % 100, chatRoomName: "")
         let generatedNickname = NicknameGenerator.generate(from: initial.name)
         initial.nickname = NicknameGenerator.resolved(name: initial.name, enteredNickname: initial.nickname)
         _value = State(initialValue: initial)
         _admissionYearText = State(initialValue: AdmissionYearPolicy.formatted(initial.admissionYear))
         _nicknameWasManuallyEdited = State(initialValue: student != nil && initial.nickname != generatedNickname)
+        self.title = title
         self.onSave = onSave
     }
     private var admissionYear: Int? { AdmissionYearPolicy.parseTwoDigit(admissionYearText) }
@@ -413,7 +415,7 @@ struct StudentEditor: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("학생 정보").font(.title2.bold())
+            Text(title).font(.title2.bold())
             Form {
                 TextField("이름", text: $value.name)
                 HStack {
@@ -480,6 +482,7 @@ struct ClassesView: View {
     @State private var deletionRequest: ClassDeletionRequest?
     @State private var showingRenameClass = false
     @State private var renameClassText = ""
+    @State private var showingTemporaryStudentEditor = false
 
     var body: some View {
         InitialRatioSplitView(
@@ -503,7 +506,8 @@ struct ClassesView: View {
                         .help("새 반 추가")
                 }
                 List(store.database.classes, selection: $selectedID) { group in
-                    VStack(alignment: .leading) { Text(group.name); Text("\(group.members.count)명 · v\(group.version)").font(.caption).foregroundStyle(.secondary) }.tag(group.id)
+                    let memberCount = store.group(id: group.id)?.members.count ?? group.members.count
+                    VStack(alignment: .leading) { Text(group.name); Text("\(memberCount)명").font(.caption).foregroundStyle(.secondary) }.tag(group.id)
                 }
                 HStack {
                     Button("이름 편집") {
@@ -527,7 +531,7 @@ struct ClassesView: View {
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } trailing: {
-                if let group = store.database.classes.first(where: { $0.id == selectedID }) {
+                if let group = store.group(id: selectedID) {
                     let candidates = availableStudents(for: group)
                     VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -537,12 +541,15 @@ struct ClassesView: View {
                     }
                     Text("현재 반 학생 명단").font(.headline)
                     List {
-                        ForEach(Array(ClassMemberSorter.sorted(group.members, students: store.database.students).enumerated()), id: \.element.id) { index, member in
+                        ForEach(Array(group.members.enumerated()), id: \.element.id) { index, member in
                             if let student = store.student(id: member.studentID) {
                                 HStack {
                                     Text("\(index + 1)").frame(width: 35, alignment: .trailing).foregroundStyle(.secondary)
                                     Text(student.name).frame(width: 100, alignment: .leading)
                                     Text(member.nicknameOverride?.isEmpty == false ? member.nicknameOverride! : student.nickname).frame(width: 100, alignment: .leading)
+                                    if store.isTemporaryStudent(id: student.id, inClassID: group.id) {
+                                        Text("임시").font(.caption).foregroundStyle(.orange)
+                                    }
                                     Text(student.chatRoomName).foregroundStyle(.secondary)
                                     Spacer()
                                     Button(role: .destructive) { remove(group, member.studentID) } label: { Image(systemName: "trash") }
@@ -553,6 +560,11 @@ struct ClassesView: View {
                     }
                     .frame(minHeight: 260, maxHeight: .infinity)
                     Divider()
+                    HStack {
+                        Text("임시 학생은 앱을 종료하면 자동으로 사라집니다.").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("임시 학생 추가") { showingTemporaryStudentEditor = true }
+                    }
                     Text("학생 추가").font(.headline)
                     TextField("이름·학교·학번 검색", text: $studentSearch).textFieldStyle(.roundedBorder)
                     HStack {
@@ -590,6 +602,14 @@ struct ClassesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: selectedID) { _, _ in selectedStudents.removeAll() }
         .sheet(isPresented: $creating) { ClassCreator { name, school, year, ids in store.createClass(name: name, school: school, year: year, studentIDs: ids); creating = false } }
+        .sheet(isPresented: $showingTemporaryStudentEditor) {
+            if let classID = selectedID {
+                StudentEditor(student: nil, title: "임시 학생 추가") {
+                    store.addTemporaryStudent($0, toClassID: classID)
+                    showingTemporaryStudentEditor = false
+                }
+            }
+        }
         .alert("반 이름 편집", isPresented: $showingRenameClass) {
             TextField("반 이름", text: $renameClassText)
             Button("취소", role: .cancel) { }
@@ -682,7 +702,7 @@ struct ClassesView: View {
     }
 
     private func addSelected(_ group: ClassGroup) {
-        var copy = group
+        guard var copy = store.database.classes.first(where: { $0.id == group.id }) else { return }
         let orderedIDs = store.database.students
             .filter { selectedStudents.contains($0.id) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -691,7 +711,12 @@ struct ClassesView: View {
         store.updateClass(copy)
         selectedStudents.removeAll()
     }
-    private func remove(_ group: ClassGroup, _ id: UUID) { var copy = group; copy.members.removeAll { $0.studentID == id }; store.updateClass(copy) }
+    private func remove(_ group: ClassGroup, _ id: UUID) {
+        if store.removeTemporaryStudent(id: id, fromClassID: group.id) { return }
+        guard var copy = store.database.classes.first(where: { $0.id == group.id }) else { return }
+        copy.members.removeAll { $0.studentID == id }
+        store.updateClass(copy)
+    }
 }
 
 private enum ClassDeletionRequest {
@@ -1177,7 +1202,7 @@ struct LessonManagementView: View {
     @State private var pendingLessonBatch: SendBatch?
     @State private var showingLessonAttachmentConfirmation = false
 
-    private var group: ClassGroup? { store.database.classes.first { $0.id == draft.classID } }
+    private var group: ClassGroup? { store.group(id: draft.classID) }
     private var preset: MessagePreset? { store.database.presets.first { $0.id == draft.presetID } }
     private var canPreview: Bool {
         guard group != nil, let preset else { return false }
@@ -1397,8 +1422,8 @@ struct LessonManagementView: View {
             mockMaximums = ["100", "100", "100"]
             rebuildPerformanceRows()
         }
-        .onChange(of: group?.version) { oldVersion, newVersion in
-            guard oldVersion != newVersion else { return }
+        .onChange(of: group?.members) { oldMembers, newMembers in
+            guard oldMembers != newMembers else { return }
             rebuildPerformanceRows()
         }
         .task(id: lessonAttachmentScanKey) {
@@ -1937,7 +1962,7 @@ struct LessonManagementView: View {
             presetVersion: preset.version
         )
         let batch = SendBatch(metadata: metadata, items: items)
-        issues.append(contentsOf: BatchParser.validate(batch: batch, database: store.database, allowEmptyMessages: allowEmptyMessages))
+        issues.append(contentsOf: BatchParser.validate(batch: batch, database: store.runtimeDatabase, allowEmptyMessages: allowEmptyMessages))
         return (batch, issues)
     }
 
@@ -1985,7 +2010,7 @@ struct LessonManagementView: View {
                     isPreparingSend = false
                     return
                 }
-                let issues = BatchParser.validate(batch: batch, database: store.database, allowEmptyMessages: operationDryRun)
+                let issues = BatchParser.validate(batch: batch, database: store.runtimeDatabase, allowEmptyMessages: operationDryRun)
                 store.currentBatch = batch
                 store.validationIssues = issues
                 guard !issues.contains(where: { $0.severity == .error }) else {
