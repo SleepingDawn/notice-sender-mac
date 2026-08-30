@@ -1410,7 +1410,10 @@ struct ChatWindowResolver {
     }
 
     private func waitForWindowClosed(_ window: UIElement, label: String) -> Bool {
-        runner.waitUntil(label: label, timeout: 0.9, pollInterval: 0.06, evaluateAfterTimeout: false) {
+        // AX can retain an attachment preview's window object briefly after a
+        // successful close. Do not turn that stale-object grace period into
+        // three serial 0.9 s waits (AXClose, button, Cmd-W).
+        runner.waitUntil(label: label, timeout: 0.2, pollInterval: 0.04, evaluateAfterTimeout: false) {
             !kakao.windows.contains { candidate in
                 areSameAXElement(candidate, window)
             }
