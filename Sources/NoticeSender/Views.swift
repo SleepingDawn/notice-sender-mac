@@ -1377,7 +1377,7 @@ struct LessonManagementView: View {
             }
             commonMessageSection
             lessonAttachmentFolderSection
-            GroupBox("학생별 입력표 · 성명 오름차순") {
+            GroupBox("학생별 입력표 · 반 명단 순서") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("마우스로 셀 범위를 드래그 선택합니다. ⌘C/⌘V로 Excel·Google Sheet처럼 복사·붙여넣고, 더블클릭하면 한 셀을 편집합니다.").font(.caption).foregroundStyle(.secondary)
@@ -1697,7 +1697,7 @@ struct LessonManagementView: View {
         performanceRows = group.members.compactMap { member -> PreparedNoticeRow? in
             guard let student = store.student(id: member.studentID) else { return nil }
             return PreparedNoticeRow(id: student.id, number: 0, name: student.name, nickname: member.nicknameOverride?.nilIfEmpty ?? student.nickname)
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        }
         for index in performanceRows.indices { performanceRows[index].number = index + 1 }
         selectedPasteRow = 0; selectedPasteColumn = 0
     }
