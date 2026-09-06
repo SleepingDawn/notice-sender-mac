@@ -209,7 +209,7 @@ public enum KmsgEmbeddedEngine {
         )
     }
 
-    public static func listChats(limit: Int = 1_000) throws -> [KmsgEmbeddedChat] {
+    public static func listChats(limit: Int = 1_000, searchQueries: [String] = []) throws -> [KmsgEmbeddedChat] {
         // Do not re-check trust on this detached worker. The app's diagnostic
         // performs the user-facing permission check on the main actor, while
         // AX itself still enforces access for every operation below. Repeating
@@ -223,7 +223,19 @@ public enum KmsgEmbeddedEngine {
             throw KmsgEmbeddedError.chatListUnavailable
         }
         let boundedLimit = max(1, min(limit, 1_000))
-        let snapshots = ChatListScanner().scanEntireList(in: window, limit: boundedLimit)
+        let scanner = ChatListScanner()
+        var snapshots = searchQueries.isEmpty ? scanner.scan(in: window, limit: boundedLimit) : []
+        defer { _ = kakao.clearChatListSearch(in: window) }
+        for query in searchQueries {
+            guard kakao.searchChatList(query, in: window) else {
+                throw KmsgEmbeddedError.chatListUnavailable
+            }
+            snapshots.append(contentsOf: scanner.scan(in: window, limit: boundedLimit))
+        }
+        var seen = Set<String>()
+        snapshots = snapshots.filter {
+            seen.insert("\($0.discovery.title)\u{0}\($0.discovery.lastMessage ?? "")").inserted
+        }
         guard !snapshots.isEmpty else { throw KmsgEmbeddedError.chatListUnavailable }
         let assignedIDs = ChatIdentityRegistryStore.shared.assignChatIDs(for: snapshots.map(\.discovery))
         return zip(snapshots, assignedIDs).enumerated().map { index, pair in

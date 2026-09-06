@@ -49,9 +49,9 @@ struct KmsgSafeAdapter: Sendable {
         "\(KmsgEmbeddedEngine.upstreamVersion) · embedded"
     }
 
-    func listChats(limit: Int = 1_000) async throws -> [KmsgEmbeddedChat] {
+    func listChats(limit: Int = 1_000, searchQueries: [String] = []) async throws -> [KmsgEmbeddedChat] {
         try await Task.detached(priority: .userInitiated) {
-            try KmsgEmbeddedEngine.listChats(limit: limit)
+            try KmsgEmbeddedEngine.listChats(limit: limit, searchQueries: searchQueries)
         }.value
     }
 

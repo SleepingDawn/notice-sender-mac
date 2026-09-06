@@ -30,7 +30,12 @@ enum ChatTextNormalizer {
 
     static func isTimeLikeValue(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parts = trimmed.split(separator: ":")
+        let clock = trimmed.replacingOccurrences(
+            of: #"^(?:오전|오후)\s*"#,
+            with: "",
+            options: .regularExpression
+        )
+        let parts = clock.split(separator: ":")
         if parts.count == 2,
            parts[0].count <= 2, parts[1].count == 2,
            parts[0].allSatisfy(\.isNumber), parts[1].allSatisfy(\.isNumber)
@@ -91,42 +96,6 @@ struct ChatListScanner {
         let snapshots = makeSnapshots(rows, startingAt: 0, trace: trace)
 
         trace?("chats: resolved rows=\(snapshots.count)")
-        return snapshots
-    }
-
-    /// Reads virtualized KakaoTalk lists page by page, then puts the list back
-    /// where it was. `scan` remains visible-rows-only for room-opening flows.
-    func scanEntireList(in window: UIElement, limit: Int, trace: ((String) -> Void)? = nil) -> [ChatListSnapshotItem] {
-        guard let container = resolveChatListContainer(in: window, trace: trace) else {
-            trace?("chats: chat list container unavailable")
-            return []
-        }
-
-        guard let scrollBar = verticalScrollBar(near: container),
-              let initialValue = scrollValue(scrollBar)
-        else {
-            return scan(in: window, limit: limit, trace: trace)
-        }
-        defer { try? scrollBar.setAttribute(kAXValueAttribute, value: NSNumber(value: initialValue)) }
-
-        var snapshots: [ChatListSnapshotItem] = []
-        var seen = Set<String>()
-        let maxPages = max(1, min(limit, 1_000))
-
-        for _ in 0..<maxPages where snapshots.count < limit {
-            let rows = collectChatItems(from: container, limit: limit - snapshots.count)
-            for snapshot in makeSnapshots(rows, startingAt: snapshots.count, trace: trace) {
-                let key = "\(snapshot.discovery.title)\u{0}\(snapshot.discovery.lastMessage ?? "")"
-                if seen.insert(key).inserted { snapshots.append(snapshot) }
-            }
-
-            guard let before = scrollValue(scrollBar) else { break }
-            try? scrollBar.performAction(kAXIncrementAction)
-            Thread.sleep(forTimeInterval: 0.08)
-            guard let after = scrollValue(scrollBar), after > before + 0.0001 else { break }
-        }
-
-        trace?("chats: resolved all rows=\(snapshots.count)")
         return snapshots
     }
 
@@ -207,16 +176,6 @@ struct ChatListScanner {
                 discovery: ChatListDiscovery(title: title, lastMessage: preview, listIndex: index + offset)
             )
         }
-    }
-
-    private func verticalScrollBar(near container: UIElement) -> UIElement? {
-        [container, container.parent].compactMap { $0 }
-            .flatMap { $0.findAll(role: kAXScrollBarRole, limit: 4, maxNodes: 120) }
-            .max { ($0.size?.height ?? 0) < ($1.size?.height ?? 0) }
-    }
-
-    private func scrollValue(_ scrollBar: UIElement) -> Double? {
-        (scrollBar.value as? NSNumber)?.doubleValue
     }
 
     private func extractTitle(from row: UIElement, trace: ((String) -> Void)? = nil) -> String {
