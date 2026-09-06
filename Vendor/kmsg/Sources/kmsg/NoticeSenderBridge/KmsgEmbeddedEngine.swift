@@ -223,7 +223,7 @@ public enum KmsgEmbeddedEngine {
             throw KmsgEmbeddedError.chatListUnavailable
         }
         let boundedLimit = max(1, min(limit, 1_000))
-        let snapshots = ChatListScanner().scan(in: window, limit: boundedLimit)
+        let snapshots = ChatListScanner().scanEntireList(in: window, limit: boundedLimit)
         guard !snapshots.isEmpty else { throw KmsgEmbeddedError.chatListUnavailable }
         let assignedIDs = ChatIdentityRegistryStore.shared.assignChatIDs(for: snapshots.map(\.discovery))
         return zip(snapshots, assignedIDs).enumerated().map { index, pair in
