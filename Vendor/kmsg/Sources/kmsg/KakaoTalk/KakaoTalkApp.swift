@@ -347,36 +347,6 @@ public final class KakaoTalkApp: Sendable {
         return chatList
     }
 
-    public func searchChatList(
-        _ query: String,
-        in window: UIElement,
-        settleDelay: TimeInterval = 0.35,
-        trace: ((String) -> Void)? = nil
-    ) -> Bool {
-        guard let field = window.findAll(role: kAXTextFieldRole, limit: 4, maxNodes: 180)
-            .first(where: { $0.isEnabled })
-        else {
-            trace?("chats: search field unavailable")
-            return false
-        }
-        do {
-            try field.setAttribute(kAXValueAttribute, value: query as CFString)
-            try field.focus()
-            guard let submit = field.findFirst(where: { $0.role == kAXButtonRole }) else {
-                trace?("chats: search submit button unavailable")
-                return false
-            }
-            try submit.press()
-            Thread.sleep(forTimeInterval: max(0.05, settleDelay))
-            invalidateChatListPaths()
-            trace?("chats: searched query='\(query)'")
-            return true
-        } catch {
-            trace?("chats: search failed (\(error))")
-            return false
-        }
-    }
-
     @discardableResult
     public func clearChatListSearch(
         in window: UIElement,

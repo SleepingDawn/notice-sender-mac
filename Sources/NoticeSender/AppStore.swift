@@ -593,14 +593,10 @@ final class AppStore: ObservableObject {
     func syncStudentsFromKakaoChats() async {
         guard !isSyncingStudentsFromKakao else { return }
         isSyncingStudentsFromKakao = true
-        banner = "00~99 학번의 카카오톡 최근 채팅방을 읽고 있습니다. 최대 1,000개까지 확인합니다."
+        banner = "카카오톡 전체 채팅방을 읽고 00~99 학번을 확인합니다. 최대 1,000개까지 확인합니다."
         defer { isSyncingStudentsFromKakao = false }
         do {
-            let nextAdmissionYear = (Calendar.current.component(.year, from: .now) + 1) % 100
-            let chats = try await KmsgSafeAdapter().listChats(
-                limit: 1_000,
-                searchQueries: [AdmissionYearPolicy.formatted(nextAdmissionYear)]
-            )
+            let chats = try await KmsgSafeAdapter().listChats(limit: 1_000)
             let output = KakaoStudentDBSynchronizer.synchronize(
                 chats: chats,
                 currentStudents: database.students

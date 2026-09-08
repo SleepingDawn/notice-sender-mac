@@ -200,7 +200,7 @@ final class KakaoAutomationService: ObservableObject {
         }
     }
 
-    func send(batch: SendBatch, dryRun: Bool, store: AppStore) async {
+    func send(batch: SendBatch, dryRun: Bool, background: Bool = false, store: AppStore) async {
         guard !isBusy else { return }
         isBusy = true
         shouldStop = false
@@ -256,6 +256,7 @@ final class KakaoAutomationService: ObservableObject {
                 try await process(
                     working.items[index],
                     dryRun: dryRun,
+                    background: background,
                     cancellationToken: cancellationToken
                 )
                 if shouldStop || cancellationToken.isCancelled {
@@ -355,6 +356,7 @@ final class KakaoAutomationService: ObservableObject {
     private func process(
         _ item: BatchItem,
         dryRun: Bool,
+        background: Bool,
         cancellationToken: KmsgCancellationToken
     ) async throws {
         if dryRun {
@@ -384,6 +386,7 @@ final class KakaoAutomationService: ObservableObject {
                 chatID: item.chatID,
                 messages: messages,
                 attachmentPaths: attachmentPaths,
+                background: background,
                 cancellationToken: cancellationToken
             )
         }

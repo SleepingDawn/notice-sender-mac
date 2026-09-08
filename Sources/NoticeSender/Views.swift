@@ -1184,6 +1184,7 @@ struct LessonManagementView: View {
     @State private var inputHistory: [LessonInputSnapshot] = []
     @State private var isPreparingSend = false
     @State private var lessonDryRun = true
+    @State private var lessonBackgroundSend = false
     @State private var lessonSelectionRevision = 0
     @State private var isCommonMessageEnabled = false
     @State private var commonMessages = [""]
@@ -1196,7 +1197,7 @@ struct LessonManagementView: View {
     @State private var lessonAttachmentScanRequested = false
     @State private var lessonAttachmentScanError: String?
     @State private var pendingLessonBatch: SendBatch?
-    @State private var showingLessonAttachmentConfirmation = false
+    @State private var showingLessonSendConfirmation = false
 
     private var group: ClassGroup? { store.group(id: draft.classID) }
     private var preset: MessagePreset? { store.database.presets.first { $0.id == draft.presetID } }
@@ -1337,6 +1338,10 @@ struct LessonManagementView: View {
                     .toggleStyle(.switch)
                     .disabled(kakao.isBusy || isPreparingSend)
                     .help("켜면 각 학생의 정확한 채팅방과 입력창만 확인하며 메시지·첨부파일은 전송하지 않습니다.")
+                Toggle("백그라운드", isOn: $lessonBackgroundSend)
+                    .toggleStyle(.switch)
+                    .disabled(lessonDryRun || kakao.isBusy || isPreparingSend)
+                    .help("이미 열린 정확한 톡방에 텍스트만 전송합니다. 카카오톡을 전면으로 가져오지 않습니다.")
                 Button {
                     requestLessonSend()
                 } label: {
@@ -1431,15 +1436,15 @@ struct LessonManagementView: View {
         } message: {
             Text("아래 학생은 자신의 호칭이 공지 문구에 포함되어 있지 않습니다. Google Sheet의 행과 문구가 맞는지 확인하세요.\n\n\(missingNicknameWarningText)")
         }
-        .alert("첨부파일 발송 확인", isPresented: $showingLessonAttachmentConfirmation) {
+        .alert("발송 확인", isPresented: $showingLessonSendConfirmation) {
             Button("뒤로가기", role: .cancel) { pendingLessonBatch = nil }
             Button("보내기", role: .destructive) {
                 guard let batch = pendingLessonBatch else { return }
                 pendingLessonBatch = nil
-                Task { await kakao.send(batch: batch, dryRun: false, store: store) }
+                Task { await kakao.send(batch: batch, dryRun: false, background: lessonBackgroundSend, store: store) }
             }
         } message: {
-            Text(AttachmentDeliveryNotice.confirmation(in: pendingLessonBatch?.items ?? []) ?? "")
+            Text(pendingLessonSendConfirmationText)
         }
     }
 
@@ -2015,12 +2020,12 @@ struct LessonManagementView: View {
                     return
                 }
                 isPreparingSend = false
-                if !operationDryRun, AttachmentDeliveryNotice.confirmation(in: batch.items) != nil {
+                if !operationDryRun {
                     pendingLessonBatch = batch
-                    showingLessonAttachmentConfirmation = true
+                    showingLessonSendConfirmation = true
                     return
                 }
-                await kakao.send(batch: batch, dryRun: operationDryRun, store: store)
+                await kakao.send(batch: batch, dryRun: operationDryRun, background: lessonBackgroundSend, store: store)
             } catch {
                 isPreparingSend = false
                 store.banner = "발송 준비 실패: \(error.localizedDescription)"
@@ -2053,6 +2058,12 @@ struct LessonManagementView: View {
             let nickname = issue.nickname.isEmpty ? "호칭 비어 있음" : "호칭: \(issue.nickname)"
             return "• \(issue.studentName) (\(nickname))"
         }.joined(separator: "\n")
+    }
+
+    private var pendingLessonSendConfirmationText: String {
+        let items = pendingLessonBatch?.items ?? []
+        let attachmentNotice = AttachmentDeliveryNotice.confirmation(in: items).map { "\n\n\($0)" } ?? ""
+        return "총 \(items.count)명에게 발송합니다.\(attachmentNotice)"
     }
 
     private static let koreanDateFormatter: DateFormatter = {
@@ -2090,7 +2101,7 @@ private struct KakaoPreparationGuide: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("KakaoTalk을 실행하고 로그인한 뒤 메인 창을 열어두세요. 최소화하거나 창을 닫아두면 안 됩니다.")
                     Text("친구·채팅 중 어느 탭에 있어도 됩니다. 발송을 시작하면 앱이 자동으로 채팅 탭 → 정확한 톡방 이름 검색 → 결과 1개 확인 → 방 열기를 수행합니다.")
-                    Text("작업 중에는 마우스와 키보드를 건드리지 마세요. 드라이런은 입력·Enter·첨부 전송을 하지 않습니다.")
+                    Text("백그라운드는 이미 열린 정확한 톡방에 텍스트만 전송하며 카카오톡을 전면으로 가져오지 않습니다. 일반 발송 중에는 마우스와 키보드를 건드리지 마세요.")
                         .foregroundStyle(.secondary)
                 }
                 .font(.caption)

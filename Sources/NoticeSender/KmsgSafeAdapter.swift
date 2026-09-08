@@ -49,9 +49,9 @@ struct KmsgSafeAdapter: Sendable {
         "\(KmsgEmbeddedEngine.upstreamVersion) · embedded"
     }
 
-    func listChats(limit: Int = 1_000, searchQueries: [String] = []) async throws -> [KmsgEmbeddedChat] {
+    func listChats(limit: Int = 1_000) async throws -> [KmsgEmbeddedChat] {
         try await Task.detached(priority: .userInitiated) {
-            try KmsgEmbeddedEngine.listChats(limit: limit, searchQueries: searchQueries)
+            try KmsgEmbeddedEngine.listChats(limit: limit)
         }.value
     }
 
@@ -108,6 +108,7 @@ struct KmsgSafeAdapter: Sendable {
         chatID: String? = nil,
         messages: [String],
         attachmentPaths: [String] = [],
+        background: Bool = false,
         cancellationToken: KmsgCancellationToken? = nil
     ) async throws -> KmsgSafeResult {
         let result = try await Task.detached(priority: .userInitiated) {
@@ -116,6 +117,7 @@ struct KmsgSafeAdapter: Sendable {
                 chatID: chatID,
                 messages: messages,
                 attachmentPaths: attachmentPaths,
+                interactionMode: background ? .backgroundExistingChat : .foregroundAutomation,
                 cancellationToken: cancellationToken
             )
         }.value

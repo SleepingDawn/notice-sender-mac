@@ -99,6 +99,52 @@ struct ChatListScanner {
         return snapshots
     }
 
+    /// Reads the virtualized KakaoTalk list from top to bottom, then restores
+    /// the user's previous scroll position.
+    func scanEntireList(in window: UIElement, limit: Int, trace: ((String) -> Void)? = nil) -> [ChatListSnapshotItem] {
+        guard let container = resolveChatListContainer(in: window, trace: trace) else {
+            trace?("chats: chat list container unavailable")
+            return []
+        }
+
+        if let axRows: [AXUIElement] = container.attributeOptional(kAXRowsAttribute),
+           axRows.count > container.children.count {
+            let rows = Array(axRows.prefix(limit)).map(UIElement.init)
+            let snapshots = makeSnapshots(rows, startingAt: 0, trace: trace)
+            trace?("chats: resolved AX rows=\(snapshots.count)")
+            return snapshots
+        }
+
+        guard let scrollBar = verticalScrollBar(near: container),
+              let initialValue = scrollValue(scrollBar)
+        else {
+            return scan(in: window, limit: limit, trace: trace)
+        }
+        defer { try? scrollBar.setAttribute(kAXValueAttribute, value: NSNumber(value: initialValue)) }
+        try? scrollBar.setAttribute(kAXValueAttribute, value: NSNumber(value: 0))
+        Thread.sleep(forTimeInterval: 0.08)
+
+        let visibleCount = max(1, collectChatItems(from: container, limit: limit).count)
+        let rowsPerStep = max(1, visibleCount - 2)
+        let pageCount = min(200, max(1, (limit + rowsPerStep - 1) / rowsPerStep))
+        var snapshots: [ChatListSnapshotItem] = []
+        var seen = Set<String>()
+
+        for page in 0...pageCount where snapshots.count < limit {
+            let position = Double(page) / Double(pageCount)
+            try? scrollBar.setAttribute(kAXValueAttribute, value: NSNumber(value: position))
+            Thread.sleep(forTimeInterval: 0.08)
+            let rows = collectChatItems(from: container, limit: limit - snapshots.count)
+            for snapshot in makeSnapshots(rows, startingAt: snapshots.count, trace: trace) {
+                let key = "\(snapshot.discovery.title)\u{0}\(snapshot.discovery.lastMessage ?? "")"
+                if seen.insert(key).inserted { snapshots.append(snapshot) }
+            }
+        }
+
+        trace?("chats: resolved all rows=\(snapshots.count)")
+        return snapshots
+    }
+
     func warmup(in window: UIElement, trace: ((String) -> Void)? = nil) -> [AXPathSlot] {
         guard let container = resolveChatListContainer(in: window, trace: trace) else {
             return []
@@ -129,10 +175,12 @@ struct ChatListScanner {
         }
 
         trace?("chats: container fast path miss, scanning")
-        let tables = window.findAll(role: kAXTableRole, limit: 1, maxNodes: 220)
-        let outlines = window.findAll(role: kAXOutlineRole, limit: 1, maxNodes: 220)
-        let lists = window.findAll(role: kAXListRole, limit: 1, maxNodes: 220)
-        let container = tables.first ?? outlines.first ?? lists.first
+        let tables = window.findAll(role: kAXTableRole, limit: 4, maxNodes: 220)
+        let outlines = window.findAll(role: kAXOutlineRole, limit: 4, maxNodes: 220)
+        let lists = window.findAll(role: kAXListRole, limit: 4, maxNodes: 220)
+        let container = (tables + outlines + lists).max {
+            collectChatItems(from: $0, limit: 50).count < collectChatItems(from: $1, limit: 50).count
+        }
 
         if let container {
             AXPathCacheStore.shared.remember(slot: .chatListContainer, root: window, element: container, trace: trace)
@@ -153,6 +201,10 @@ struct ChatListScanner {
     private func collectChatItems(from container: UIElement, limit: Int) -> [UIElement] {
         let role = container.role ?? ""
 
+        if let axRows: [AXUIElement] = container.attributeOptional(kAXRowsAttribute), !axRows.isEmpty {
+            return Array(axRows.prefix(limit)).map(UIElement.init)
+        }
+
         if role == kAXListRole {
             let children = Array(container.children.prefix(limit))
             return deduplicateElements(children)
@@ -165,6 +217,21 @@ struct ChatListScanner {
 
         let discoveredRows = container.findAll(role: kAXRowRole, limit: limit, maxNodes: max(80, limit * 8))
         return deduplicateElements(discoveredRows)
+    }
+
+    private func verticalScrollBar(near container: UIElement) -> UIElement? {
+        var candidates: [UIElement] = []
+        var current: UIElement? = container
+        for _ in 0..<4 {
+            guard let element = current else { break }
+            candidates.append(contentsOf: element.findAll(role: kAXScrollBarRole, limit: 4, maxNodes: 120))
+            current = element.parent
+        }
+        return candidates.max { ($0.size?.height ?? 0) < ($1.size?.height ?? 0) }
+    }
+
+    private func scrollValue(_ scrollBar: UIElement) -> Double? {
+        (scrollBar.value as? NSNumber)?.doubleValue
     }
 
     private func makeSnapshots(_ rows: [UIElement], startingAt index: Int, trace: ((String) -> Void)?) -> [ChatListSnapshotItem] {

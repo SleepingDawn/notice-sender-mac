@@ -161,6 +161,11 @@ public enum KmsgPreSendRecoveryPolicy {
     }
 }
 
+public enum KmsgSendInteractionMode: Sendable {
+    case foregroundAutomation
+    case backgroundExistingChat
+}
+
 /// A narrow, fail-closed bridge around kmsg's AX resolver.
 ///
 /// NoticeSender deliberately exposes none of kmsg's fuzzy matching or forced
@@ -198,6 +203,7 @@ public enum KmsgEmbeddedEngine {
         chatID: String? = nil,
         messages: [String],
         attachmentPaths: [String] = [],
+        interactionMode: KmsgSendInteractionMode = .foregroundAutomation,
         cancellationToken: KmsgCancellationToken? = nil
     ) throws -> KmsgEmbeddedResult {
         try execute(
@@ -205,11 +211,12 @@ public enum KmsgEmbeddedEngine {
             chatID: chatID,
             messages: messages,
             attachmentPaths: attachmentPaths,
+            interactionMode: interactionMode,
             cancellationToken: cancellationToken
         )
     }
 
-    public static func listChats(limit: Int = 1_000, searchQueries: [String] = []) throws -> [KmsgEmbeddedChat] {
+    public static func listChats(limit: Int = 1_000) throws -> [KmsgEmbeddedChat] {
         // Do not re-check trust on this detached worker. The app's diagnostic
         // performs the user-facing permission check on the main actor, while
         // AX itself still enforces access for every operation below. Repeating
@@ -223,19 +230,7 @@ public enum KmsgEmbeddedEngine {
             throw KmsgEmbeddedError.chatListUnavailable
         }
         let boundedLimit = max(1, min(limit, 1_000))
-        let scanner = ChatListScanner()
-        var snapshots = searchQueries.isEmpty ? scanner.scan(in: window, limit: boundedLimit) : []
-        defer { _ = kakao.clearChatListSearch(in: window) }
-        for query in searchQueries {
-            guard kakao.searchChatList(query, in: window) else {
-                throw KmsgEmbeddedError.chatListUnavailable
-            }
-            snapshots.append(contentsOf: scanner.scan(in: window, limit: boundedLimit))
-        }
-        var seen = Set<String>()
-        snapshots = snapshots.filter {
-            seen.insert("\($0.discovery.title)\u{0}\($0.discovery.lastMessage ?? "")").inserted
-        }
+        let snapshots = ChatListScanner().scanEntireList(in: window, limit: boundedLimit)
         guard !snapshots.isEmpty else { throw KmsgEmbeddedError.chatListUnavailable }
         let assignedIDs = ChatIdentityRegistryStore.shared.assignChatIDs(for: snapshots.map(\.discovery))
         return zip(snapshots, assignedIDs).enumerated().map { index, pair in
@@ -276,9 +271,13 @@ public enum KmsgEmbeddedEngine {
         chatID: String?,
         messages: [String]?,
         attachmentPaths: [String],
+        interactionMode: KmsgSendInteractionMode = .foregroundAutomation,
         cancellationToken: KmsgCancellationToken?
     ) throws -> KmsgEmbeddedResult {
         try throwIfCancelled(cancellationToken)
+        if interactionMode == .backgroundExistingChat, !attachmentPaths.isEmpty {
+            throw KakaoTalkError.actionFailed("[BACKGROUND_TEXT_ONLY] Background sending supports text only.")
+        }
         cancellationToken?.setCurrentActivityDescription("채팅방 확인")
         let attachmentURLs = try validateAttachmentPaths(attachmentPaths)
         let kakao = try KakaoTalkApp()
@@ -294,7 +293,7 @@ public enum KmsgEmbeddedEngine {
                 useCache: false,
                 deepRecoveryEnabled: true,
                 layoutMode: .preserve,
-                interactionMode: .allowUIAutomation,
+                interactionMode: interactionMode == .backgroundExistingChat ? .backgroundSafe : .allowUIAutomation,
                 exactMatchOnly: true,
                 requireUniqueMatch: true
             )
@@ -376,7 +375,9 @@ public enum KmsgEmbeddedEngine {
             return KmsgEmbeddedResult(roomTitle: actualTitle, didSend: false)
         }
 
-        kakao.activate()
+        if interactionMode == .foregroundAutomation {
+            kakao.activate()
+        }
         for message in messages ?? [] {
             cancellationToken?.setCurrentActivityDescription(
                 "메시지 전송 확인",

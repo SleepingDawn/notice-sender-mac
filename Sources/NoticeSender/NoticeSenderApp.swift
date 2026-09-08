@@ -15,6 +15,24 @@ struct NoticeSenderApp: App {
         if arguments.contains("--self-test") {
             Darwin.exit(SelfTest.run())
         }
+        if arguments.contains("--kakao-db-diagnostic") {
+            Task.detached {
+                do {
+                    let chats = try await KmsgSafeAdapter().listChats(limit: 1_000)
+                    let rooms = chats.compactMap { KakaoStudentRoomParser.parse($0, knownSchools: []) }
+                        .filter { $0.admissionYear == 27 && $0.hasStandardSuffix }
+                    for room in rooms.sorted(by: { $0.title < $1.title }) {
+                        print("\(room.school)\t\(room.admissionYear)\t\(room.name)\t\(room.title)")
+                    }
+                    print("KAKAO_DB_DIAGNOSTIC chats=\(chats.count) rooms27=\(rooms.count) students27=\(Set(rooms.map(\.identityKey)).count)")
+                    Darwin.exit(EXIT_SUCCESS)
+                } catch {
+                    fputs("카카오톡 DB 진단 실패: \(error.localizedDescription)\n", stderr)
+                    Darwin.exit(EXIT_FAILURE)
+                }
+            }
+            dispatchMain()
+        }
         if arguments.contains("--ai-diagnostic") {
             Task.detached {
                 let availability = AppleIntelligencePresetEditor.availability

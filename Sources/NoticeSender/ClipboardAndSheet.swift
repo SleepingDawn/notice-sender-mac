@@ -30,8 +30,7 @@ enum SheetTemplateBuilder {
 
     private static func buildDirect(group: ClassGroup, students: [Student], preset: MessagePreset) -> SheetTemplate {
         let sessionID = UUID()
-        let memberStudents = group.members.compactMap { member in students.first { $0.id == member.studentID } }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let memberStudents = sortedMembers(of: group, in: students)
         // A:D is the only visible table. E:H carries narrow identity and safety data.
         let columnCount = 8
         var rows = [Array(repeating: "", count: columnCount)]
@@ -50,7 +49,7 @@ enum SheetTemplateBuilder {
             if index == rows.count { rows.append(Array(repeating: "", count: columnCount)) }
             rows[index][6] = pair.0; rows[index][7] = pair.1
         }
-        let tsv = rows.map { $0.map(tsvEscape).joined(separator: "\t") }.joined(separator: "\n")
+        let tsv = tsv(from: rows)
         let safety = "font-size:1px;color:#fff;width:2px;max-width:2px;padding:0;border:0"
         let visible = "border:1px solid #111;padding:6px"
         let htmlRows = rows.enumerated().map { rowIndex, row in
@@ -63,8 +62,7 @@ enum SheetTemplateBuilder {
 
     private static func buildLesson(group: ClassGroup, students: [Student], preset: MessagePreset) -> SheetTemplate {
         let sessionID = UUID()
-        let memberStudents = group.members.compactMap { member in students.first { $0.id == member.studentID } }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let memberStudents = sortedMembers(of: group, in: students)
         // A:J is the visible working table. K:M contains narrow safety data used by the app.
         var rows = Array(repeating: Array(repeating: "", count: 13), count: 3)
         rows[0][1] = "성명 (홍길동)"; rows[0][2] = "성명 (길동이)"; rows[0][3] = "1회차"
@@ -102,15 +100,14 @@ enum SheetTemplateBuilder {
             rows[index][11] = pair.0; rows[index][12] = pair.1
         }
 
-        let tsv = rows.map { $0.map(tsvEscape).joined(separator: "\t") }.joined(separator: "\n")
+        let tsv = tsv(from: rows)
         let html = lessonHTML(rows: rows, firstStudentRow: firstStudentRow, studentCount: memberStudents.count)
         return SheetTemplate(tsv: tsv, html: html, sessionID: sessionID)
     }
 
     private static func buildMock(group: ClassGroup, students: [Student], preset: MessagePreset) -> SheetTemplate {
         let sessionID = UUID()
-        let memberStudents = group.members.compactMap { member in students.first { $0.id == member.studentID } }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let memberStudents = sortedMembers(of: group, in: students)
         let mockCount = max(1, min(3, preset.mockExamCount ?? 3))
         let headers = ["번호", "이름", "호칭", "출석", "태도"]
             + (1...mockCount).map { "모의고사\($0) 점수" }
@@ -137,7 +134,7 @@ enum SheetTemplateBuilder {
         for title in ["진도", "숙제", "시험단원", "공지"] { var row = Array(repeating: "", count: columnCount); row[3] = title; rows.append(row) }
         let metadata = [("NOTICE_SENDER_SAFE", "1"), ("class_id", group.id.uuidString), ("session_id", sessionID.uuidString), ("date", "=\(columnName(headers.count - 2))1"), ("preset_id", preset.id.uuidString), ("preset_version", String(preset.version)), ("preset_type", preset.kind.category.rawValue)]
         for (index, pair) in metadata.enumerated() where rows.indices.contains(index) { rows[index][metadataColumn] = pair.0; rows[index][metadataColumn + 1] = pair.1 }
-        let tsv = rows.map { $0.map(tsvEscape).joined(separator: "\t") }.joined(separator: "\n")
+        let tsv = tsv(from: rows)
         let safety = "font-size:1px;color:#fff;width:2px;max-width:2px;padding:0;border:0"
         let htmlRows = rows.map { row in
             "<tr>" + row.enumerated().map { column, value in
@@ -223,6 +220,11 @@ enum SheetTemplateBuilder {
 
     private static func formulaText(_ value: String) -> String { "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\"" }
     private static func tsvEscape(_ value: String) -> String { value.replacingOccurrences(of: "\t", with: " ") }
+    private static func sortedMembers(of group: ClassGroup, in students: [Student]) -> [Student] {
+        group.members.compactMap { member in students.first { $0.id == member.studentID } }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+    private static func tsv(from rows: [[String]]) -> String { rows.map { $0.map(tsvEscape).joined(separator: "\t") }.joined(separator: "\n") }
     private static func lessonHTML(rows: [[String]], firstStudentRow: Int, studentCount: Int) -> String {
         let border = "border:1px solid #111;padding:6px;vertical-align:middle"
         let center = "\(border);text-align:center;font-weight:600"

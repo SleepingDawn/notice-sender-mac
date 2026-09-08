@@ -39,17 +39,21 @@ enum SendLogCSV {
                 log.detail ?? "",
             ]
         }
-        let text = rows.map { $0.map(escaped).joined(separator: ",") }
-            .joined(separator: "\r\n") + "\r\n"
-
-        // Excel detects UTF-8 Korean text reliably when the CSV begins with a BOM.
-        var data = Data([0xEF, 0xBB, 0xBF])
-        data.append(contentsOf: text.utf8)
-        return data
+        return CSVDocument.data(rows: rows)
     }
 
     static func write(logs: [SendLog], to url: URL) throws {
         try data(logs: logs).write(to: url, options: .atomic)
+    }
+}
+
+enum CSVDocument {
+    static func data(rows: [[String]]) -> Data {
+        let text = rows.map { $0.map(escaped).joined(separator: ",") }.joined(separator: "\r\n") + "\r\n"
+        // Excel detects UTF-8 Korean text reliably when the CSV begins with a BOM.
+        var data = Data([0xEF, 0xBB, 0xBF])
+        data.append(contentsOf: text.utf8)
+        return data
     }
 
     private static func escaped(_ value: String) -> String {

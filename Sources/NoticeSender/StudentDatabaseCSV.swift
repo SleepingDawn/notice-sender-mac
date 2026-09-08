@@ -24,17 +24,10 @@ enum StudentDatabaseCSV {
                 student.isActive ? "활성" : "비활성",
             ]
         }
-        let text = rows.map { $0.map(escaped).joined(separator: ",") }.joined(separator: "\r\n") + "\r\n"
-        var data = Data([0xEF, 0xBB, 0xBF])
-        data.append(contentsOf: text.utf8)
-        return data
+        return CSVDocument.data(rows: rows)
     }
 
     static func write(students: [Student], to url: URL) throws {
         try data(students: students).write(to: url, options: .atomic)
-    }
-
-    private static func escaped(_ value: String) -> String {
-        "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 }
