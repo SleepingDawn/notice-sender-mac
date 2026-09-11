@@ -17,9 +17,14 @@ struct NoticeSenderApp: App {
         }
         if let index = arguments.firstIndex(of: "--kakao-verify-room"), arguments.indices.contains(index + 1) {
             let roomName = arguments[index + 1]
+            let chatID = arguments.indices.contains(index + 2) ? arguments[index + 2] : nil
             Task.detached {
                 do {
-                    _ = try await KmsgSafeAdapter().verifyByExactRoomSearch(roomName: roomName)
+                    if let chatID {
+                        _ = try await KmsgSafeAdapter().verify(roomName: roomName, chatID: chatID)
+                    } else {
+                        _ = try await KmsgSafeAdapter().verifyByExactRoomSearch(roomName: roomName)
+                    }
                     print("KAKAO_ROOM_VERIFY_OK (no messages sent)")
                     Darwin.exit(EXIT_SUCCESS)
                 } catch {

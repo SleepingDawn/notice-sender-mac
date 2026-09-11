@@ -1213,7 +1213,8 @@ enum SelfTest {
             let recognized = chats.compactMap { KakaoStudentRoomParser.parse($0, knownSchools: []) }
             return chats.count <= 1_000 && recognized.count >= 500
         }
-        let providedWorkbook = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("2026 1학기.xlsx")
+        let providedWorkbook = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Resources/2026 1학기.xlsx")
         if FileManager.default.fileExists(atPath: providedWorkbook.path) {
             check("제공 XLSX 340명 가져오기", failures: &failures) {
                 let result = try XLSXMigrationImporter.importWorkbook(at: providedWorkbook)
