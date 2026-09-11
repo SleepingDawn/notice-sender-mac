@@ -307,19 +307,44 @@ public final class UIElement: @unchecked Sendable {
     }
 
     /// Find first descendant matching a predicate (breadth-first search)
-    public func findFirst(where predicate: (UIElement) -> Bool) -> UIElement? {
-        var queue = children
-        var index = 0
+    public func findFirst(
+        where predicate: (UIElement) -> Bool,
+        maxNodes: Int = .max,
+        excludingChildrenOfRoles excludedRoles: Set<String> = [],
+        isCancelled: () -> Bool = { false }
+    ) -> UIElement? {
+        Self.firstDescendant(
+            of: self,
+            children: { element in
+                if !excludedRoles.isEmpty, excludedRoles.contains(element.role ?? "") { return [] }
+                return element.children
+            },
+            matching: predicate,
+            maxNodes: maxNodes,
+            isCancelled: isCancelled
+        )
+    }
 
-        while index < queue.count {
+    /// Shared traversal, also exercised with synthetic trees in the app self-test.
+    public static func firstDescendant<Node>(
+        of root: Node,
+        children: (Node) -> [Node],
+        matching predicate: (Node) -> Bool,
+        maxNodes: Int,
+        isCancelled: () -> Bool
+    ) -> Node? {
+        guard maxNodes > 0, !isCancelled() else { return nil }
+        var queue = children(root)
+        var index = 0
+        while index < queue.count && index < maxNodes && !isCancelled() {
             let current = queue[index]
             index += 1
             if predicate(current) {
-                return current
+                return isCancelled() ? nil : current
             }
-            queue.append(contentsOf: current.children)
+            guard index < maxNodes, !isCancelled() else { break }
+            queue.append(contentsOf: children(current))
         }
-
         return nil
     }
 

@@ -122,8 +122,10 @@ struct ChatWindowResolver {
         let chatListWindow = kakao.openChatListTab(
             fallbackWindow: usableWindow,
             settleDelay: 0.35,
-            trace: { message in runner.log(message) }
+            trace: { message in runner.log(message) },
+            isCancelled: { runner.isCancelled }
         )
+        try ensureNotCancelled()
         let searchWindow = selectSearchWindow(fallback: chatListWindow ?? usableWindow)
         standardizeReadableWindow(searchWindow, label: "search root window")
         try ensureNotCancelled()
@@ -148,9 +150,11 @@ struct ChatWindowResolver {
         let chatListWindow = kakao.openChatListTab(
             fallbackWindow: usableWindow,
             settleDelay: 0.35,
-            trace: { message in runner.log(message) }
+            trace: { message in runner.log(message) },
+            isCancelled: { runner.isCancelled }
         )
 
+        try ensureNotCancelled()
         // A title-only existing-window match is unsafe for a selected chat_id:
         // another room may expose the same visible title. Strict callers always
         // re-open the registry-matched chat-list row.
@@ -171,6 +175,7 @@ struct ChatWindowResolver {
         // or virtualizes the recent-chat list. Fall back to the same exact and
         // unique title search instead of failing at the list-row lookup.
         runner.log("chat_id: exact row unavailable; falling back to exact search for '\(query)'")
+        try ensureNotCancelled()
         let searchWindow = selectSearchWindow(fallback: chatListWindow ?? usableWindow)
         standardizeReadableWindow(searchWindow, label: "search root window")
         try ensureNotCancelled()

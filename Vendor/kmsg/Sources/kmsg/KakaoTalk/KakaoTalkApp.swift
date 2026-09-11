@@ -302,17 +302,23 @@ public final class KakaoTalkApp: Sendable {
     public func openChatListTab(
         fallbackWindow: UIElement? = nil,
         settleDelay: TimeInterval = 0.35,
-        trace: ((String) -> Void)? = nil
+        trace: ((String) -> Void)? = nil,
+        isCancelled: () -> Bool = { false }
     ) -> UIElement? {
+        guard !isCancelled() else { return nil }
         let root = chatListWindow ?? mainWindow ?? fallbackWindow ?? windows.first
         guard let root else {
             trace?("chats: no window available for chatrooms navigation")
             return nil
         }
-        let chatroomsButton =
-            root.findFirst(identifier: "chatrooms") ??
-            applicationElement.findFirst(identifier: "chatrooms")
+        let chatroomsButton = root.findFirst(
+            where: { $0.identifier == "chatrooms" },
+            maxNodes: 120,
+            excludingChildrenOfRoles: [kAXTableRole, kAXOutlineRole, kAXListRole],
+            isCancelled: isCancelled
+        )
 
+        guard !isCancelled() else { return nil }
         activate()
         var shouldUseShortcutFallback = chatroomsButton == nil
         if let chatroomsButton {
@@ -336,13 +342,14 @@ public final class KakaoTalkApp: Sendable {
             trace?("chats: chatrooms navigation button unavailable; using Command-2 fallback")
         }
 
+        guard !isCancelled() else { return nil }
         if shouldUseShortcutFallback {
             pressChatListShortcut()
             trace?("chats: pressed Command-2 fallback")
             Thread.sleep(forTimeInterval: max(0.05, settleDelay))
         }
         let chatList = chatListWindow ?? mainWindow ?? root
-        _ = clearChatListSearch(in: chatList, settleDelay: settleDelay, trace: trace)
+        _ = clearChatListSearch(in: chatList, settleDelay: settleDelay, trace: trace, isCancelled: isCancelled)
         invalidateChatListPaths()
         return chatList
     }
@@ -351,13 +358,18 @@ public final class KakaoTalkApp: Sendable {
     public func clearChatListSearch(
         in window: UIElement,
         settleDelay: TimeInterval = 0.35,
-        trace: ((String) -> Void)? = nil
+        trace: ((String) -> Void)? = nil,
+        isCancelled: () -> Bool = { false }
     ) -> Bool {
         guard let cancel = window.findFirst(where: {
             $0.role == kAXButtonRole &&
             [$0.title, $0.axDescription, $0.helpText].compactMap { $0 }.contains("취소")
-        }) else { return false }
-        try? cancel.press()
+        }, maxNodes: 120,
+           excludingChildrenOfRoles: [kAXTableRole, kAXOutlineRole, kAXListRole],
+           isCancelled: isCancelled) else { return false }
+        // Search controls live outside the chat rows; never walk the full chat history.
+        guard !isCancelled() else { return false }
+        do { try cancel.press() } catch { return false }
         trace?("chats: cleared active search filter")
         Thread.sleep(forTimeInterval: max(0.05, settleDelay))
         invalidateChatListPaths()

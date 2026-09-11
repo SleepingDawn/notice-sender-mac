@@ -335,7 +335,8 @@ public enum KmsgEmbeddedEngine {
                 _ = kakao.openChatListTab(
                     fallbackWindow: recoveredWindow,
                     settleDelay: 0.35,
-                    trace: { message in runner.log(message) }
+                    trace: { message in runner.log(message) },
+                    isCancelled: { runner.isCancelled }
                 )
                 resolver = makeResolver()
             }

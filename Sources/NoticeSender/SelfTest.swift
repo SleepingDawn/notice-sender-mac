@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import KmsgSafeCore
 
@@ -5,6 +6,50 @@ enum SelfTest {
     @MainActor
     static func run() -> Int32 {
         var failures: [String] = []
+        check("AX 탐색 취소 및 0개 제한은 탐색 전에 반환", failures: &failures) {
+            let root = UIElement(AXUIElementCreateApplication(-1))
+            var cancellationChecked = false
+            var predicateCalled = false
+            let cancelled = root.findFirst(where: { _ in
+                predicateCalled = true
+                return true
+            }, isCancelled: {
+                cancellationChecked = true
+                return true
+            })
+            let empty = root.findFirst(where: { _ in
+                predicateCalled = true
+                return true
+            }, maxNodes: 0)
+            return cancelled == nil && empty == nil && cancellationChecked && !predicateCalled
+        }
+        check("AX 탐색은 순환 트리도 제한하고 탐색 중 취소를 반영", failures: &failures) {
+            var visited = 0
+            let bounded: Int? = UIElement.firstDescendant(
+                of: 0, children: { [$0] },
+                matching: { _ in visited += 1; return false },
+                maxNodes: 120, isCancelled: { false }
+            )
+            guard bounded == nil, visited == 120 else { return false }
+            visited = 0
+            let token = KmsgCancellationToken()
+            let stopped: Int? = UIElement.firstDescendant(
+                of: 0, children: { [$0 + 1] },
+                matching: { _ in visited += 1; token.cancel(); return true },
+                maxNodes: 120, isCancelled: { token.isCancelled }
+            )
+            return stopped == nil && visited == 1
+        }
+        check("AX 탐색은 가까운 컨트롤부터 찾고 마지막 노드를 확장하지 않음", failures: &failures) {
+            var expanded: [Int] = []
+            let found: Int? = UIElement.firstDescendant(
+                of: 0, children: { node in
+                    expanded.append(node)
+                    return node == 0 ? [1, 2] : [3]
+                }, matching: { $0 == 2 }, maxNodes: 2, isCancelled: { false }
+            )
+            return found == 2 && expanded == [0, 1]
+        }
         check("직접입력 기본 Preset", failures: &failures) {
             DefaultPresets.all.first?.kind == .direct
                 && DefaultPresets.direct.name == "직접입력"
