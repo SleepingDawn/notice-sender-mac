@@ -60,7 +60,6 @@ private struct SearchScanProfile {
     let textLimit: Int
     let textNodeBudget: Int
     let includeSupplementalRoles: Bool
-    let includeApplicationRoot: Bool
 }
 
 private struct SearchCandidate {
@@ -357,6 +356,7 @@ struct ChatWindowResolver {
 
         let openTriggered = triggerSearchResultOpen(
             matchingResult,
+            rootWindow: rootWindow,
             searchField: searchField,
             query: query
         ) {
@@ -488,15 +488,9 @@ struct ChatWindowResolver {
             return field
         }
 
-        var buttonRoots = [rootWindow]
-        if let focusedWindow = kakao.focusedWindow { buttonRoots.append(focusedWindow) }
-        if let mainWindow = kakao.mainWindow { buttonRoots.append(mainWindow) }
-        buttonRoots.append(kakao.applicationElement)
-
-        let allButtons = deduplicateElements(
-            deduplicateElements(buttonRoots).flatMap { root in
-                root.findAll(role: kAXButtonRole, limit: 48, maxNodes: 600)
-            }
+        let allButtons = rootWindow.findAll(
+            role: kAXButtonRole, limit: 48, maxNodes: 600,
+            isCancelled: { runner.isCancelled }
         )
         runner.log("search: visible buttons=\(allButtons.count)")
         let searchButtons = allButtons.filter { button in
@@ -520,6 +514,7 @@ struct ChatWindowResolver {
         runner.log("search: search-like buttons=\(searchButtons.count)")
 
         for button in searchButtons.prefix(4) {
+            guard !runner.isCancelled else { return nil }
             do {
                 try button.press()
                 runner.log("search: pressed search-like button title='\(button.title ?? "")' id='\(button.identifier ?? "")'")
@@ -539,6 +534,7 @@ struct ChatWindowResolver {
         // button is not present in this process's current AX subtree.
         kakao.activate()
         _ = tryRaiseWindow(rootWindow)
+        guard !runner.isCancelled else { return nil }
         runner.log("search: opening search field via Command-F fallback")
         runner.pressCommandF()
         Thread.sleep(forTimeInterval: 0.12)
@@ -552,16 +548,10 @@ struct ChatWindowResolver {
     }
 
     private func discoverSearchFieldCandidates(in rootWindow: UIElement) -> [UIElement] {
-        var fields: [UIElement] = []
-        fields.append(contentsOf: rootWindow.findAll(role: kAXTextFieldRole, limit: 8, maxNodes: 140))
-        if let focusedWindow = kakao.focusedWindow {
-            fields.append(contentsOf: focusedWindow.findAll(role: kAXTextFieldRole, limit: 8, maxNodes: 140))
-        }
-        if let mainWindow = kakao.mainWindow {
-            fields.append(contentsOf: mainWindow.findAll(role: kAXTextFieldRole, limit: 8, maxNodes: 140))
-        }
-        fields.append(contentsOf: kakao.applicationElement.findAll(role: kAXTextFieldRole, limit: 12, maxNodes: 600))
-        return fields.filter { $0.isEnabled }
+        rootWindow.findAll(
+            role: kAXTextFieldRole, limit: 8, maxNodes: 140,
+            isCancelled: { runner.isCancelled }
+        ).filter { $0.isEnabled }
     }
 
     private func waitForMatchingSearchResults(query: String, rootWindow: UIElement) -> [SearchCandidate] {
@@ -575,8 +565,7 @@ struct ChatWindowResolver {
             candidateNodeBudget: 320,
             textLimit: 6,
             textNodeBudget: 80,
-            includeSupplementalRoles: false,
-            includeApplicationRoot: false
+            includeSupplementalRoles: false
         )
         let expandedProfile = SearchScanProfile(
             label: "expanded",
@@ -588,8 +577,7 @@ struct ChatWindowResolver {
             candidateNodeBudget: 1_200,
             textLimit: 16,
             textNodeBudget: 220,
-            includeSupplementalRoles: true,
-            includeApplicationRoot: true
+            includeSupplementalRoles: true
         )
 
         var matches: [SearchCandidate] = []
@@ -622,59 +610,47 @@ struct ChatWindowResolver {
         rootWindow: UIElement,
         profile: SearchScanProfile
     ) -> [SearchCandidate] {
-        var roots: [UIElement] = [rootWindow]
-        if let focusedWindow = kakao.focusedWindow {
-            roots.append(focusedWindow)
-        }
-        if let mainWindow = kakao.mainWindow {
-            roots.append(mainWindow)
-        }
-        if profile.includeApplicationRoot {
-            roots.append(kakao.applicationElement)
-        }
-        roots = deduplicateElements(roots)
+        // Only the window containing this search may contribute results.
+        // Other chat windows expose message rows, not search matches.
 
         var results: [SearchCandidate] = []
-        for root in roots {
-            var candidates: [UIElement] = []
-            candidates.append(contentsOf: root.findAll(role: kAXRowRole, limit: profile.rowLimit, maxNodes: profile.candidateNodeBudget))
-            candidates.append(contentsOf: root.findAll(role: kAXCellRole, limit: profile.cellLimit, maxNodes: profile.candidateNodeBudget))
+        guard !runner.isCancelled else { return [] }
+        var candidates: [UIElement] = []
+        candidates.append(contentsOf: rootWindow.findAll(role: kAXRowRole, limit: profile.rowLimit, maxNodes: profile.candidateNodeBudget, isCancelled: { runner.isCancelled }))
+        candidates.append(contentsOf: rootWindow.findAll(role: kAXCellRole, limit: profile.cellLimit, maxNodes: profile.candidateNodeBudget, isCancelled: { runner.isCancelled }))
 
-            if profile.includeSupplementalRoles {
-                candidates.append(contentsOf: root.findAll(role: kAXGroupRole, limit: profile.supplementalLimit, maxNodes: profile.candidateNodeBudget))
-                candidates.append(contentsOf: root.findAll(role: kAXButtonRole, limit: profile.supplementalLimit, maxNodes: profile.candidateNodeBudget))
-                candidates.append(contentsOf: root.findAll(role: kAXStaticTextRole, limit: profile.supplementalLimit, maxNodes: profile.candidateNodeBudget))
-            }
-
-            candidates = deduplicateElements(candidates)
-            for candidate in candidates {
-                // The container around KakaoTalk's search field can itself be
-                // exposed as an AXRow/AXCell. Its current value equals the query,
-                // but it is not a chat result.
-                guard !containsSearchFieldValue(query, in: candidate) else {
-                    continue
-                }
-                let (matchScore, matchedText) = bestQueryMatch(
-                    query: query,
-                    in: candidate,
-                    textLimit: profile.textLimit,
-                    textNodeBudget: profile.textNodeBudget
-                )
-                guard matchScore > 0, let matchedText else { continue }
-                let activationCandidate = activationTarget(for: candidate)
-                results.append(
-                    SearchCandidate(
-                        element: activationCandidate,
-                        textScore: matchScore,
-                        matchedText: matchedText
-                    )
-                )
-            }
-
-            if !results.isEmpty && !profile.includeSupplementalRoles {
-                break
-            }
+        if profile.includeSupplementalRoles {
+            candidates.append(contentsOf: rootWindow.findAll(role: kAXGroupRole, limit: profile.supplementalLimit, maxNodes: profile.candidateNodeBudget, isCancelled: { runner.isCancelled }))
+            candidates.append(contentsOf: rootWindow.findAll(role: kAXButtonRole, limit: profile.supplementalLimit, maxNodes: profile.candidateNodeBudget, isCancelled: { runner.isCancelled }))
+            candidates.append(contentsOf: rootWindow.findAll(role: kAXStaticTextRole, limit: profile.supplementalLimit, maxNodes: profile.candidateNodeBudget, isCancelled: { runner.isCancelled }))
         }
+
+        candidates = deduplicateElements(candidates)
+        for candidate in candidates {
+            guard !runner.isCancelled else { return [] }
+            // The container around KakaoTalk's search field can itself be
+            // exposed as an AXRow/AXCell. Its current value equals the query,
+            // but it is not a chat result.
+            guard !containsSearchFieldValue(query, in: candidate) else {
+                continue
+            }
+            let (matchScore, matchedText) = bestQueryMatch(
+                query: query,
+                in: candidate,
+                textLimit: profile.textLimit,
+                textNodeBudget: profile.textNodeBudget
+            )
+            guard matchScore > 0, let matchedText else { continue }
+            let activationCandidate = activationTarget(for: candidate)
+            results.append(
+                SearchCandidate(
+                    element: activationCandidate,
+                    textScore: matchScore,
+                    matchedText: matchedText
+                )
+            )
+        }
+
 
         return deduplicateSearchCandidates(results)
     }
@@ -683,7 +659,8 @@ struct ChatWindowResolver {
         let fields = element.findAll(
             role: kAXTextFieldRole,
             limit: 4,
-            maxNodes: 100
+            maxNodes: 100,
+            isCancelled: { runner.isCancelled }
         )
         return fields.contains { field in
             guard let value = field.stringValue else { return false }
@@ -829,6 +806,7 @@ struct ChatWindowResolver {
 
     private func triggerSearchResultOpen(
         _ candidate: SearchCandidate,
+        rootWindow: UIElement,
         searchField: UIElement,
         query: String,
         opened: () -> Bool
@@ -900,14 +878,14 @@ struct ChatWindowResolver {
             candidateNodeBudget: 1_600,
             textLimit: 16,
             textNodeBudget: 240,
-            includeSupplementalRoles: true,
-            includeApplicationRoot: true
+            includeSupplementalRoles: true
         )
         let refreshed = findMatchingSearchResults(
             query: query,
-            rootWindow: kakao.focusedWindow ?? kakao.mainWindow ?? searchField,
+            rootWindow: rootWindow,
             profile: refreshProfile
         )
+        guard !runner.isCancelled, !requireUniqueMatch || refreshed.count == 1 else { return false }
         for fresh in refreshed.sorted(by: { scoreSearchResult($0) > scoreSearchResult($1) }) {
             if runner.isCancelled { return false }
             if tryActivateSearchResult(fresh.element, label: "fresh exact result") {
@@ -1062,7 +1040,8 @@ struct ChatWindowResolver {
         candidates.append(contentsOf: element.findAll(
             role: kAXCellRole,
             limit: 4,
-            maxNodes: 40
+            maxNodes: 40,
+            isCancelled: { runner.isCancelled }
         ))
         if let parent = element.parent {
             candidates.append(parent)
@@ -1146,7 +1125,8 @@ struct ChatWindowResolver {
         let staticTexts = element.findAll(
             role: kAXStaticTextRole,
             limit: textLimit,
-            maxNodes: textNodeBudget
+            maxNodes: textNodeBudget,
+            isCancelled: { runner.isCancelled }
         )
         for staticText in staticTexts {
             appendText(staticText.stringValue)
@@ -1155,7 +1135,8 @@ struct ChatWindowResolver {
         let textAreas = element.findAll(
             role: kAXTextAreaRole,
             limit: max(2, textLimit / 2),
-            maxNodes: textNodeBudget
+            maxNodes: textNodeBudget,
+            isCancelled: { runner.isCancelled }
         )
         for textArea in textAreas {
             appendText(textArea.stringValue)
@@ -1399,7 +1380,7 @@ struct ChatWindowResolver {
     }
 
     private func findCloseButton(in window: UIElement) -> UIElement? {
-        let buttons = window.findAll(role: kAXButtonRole, limit: 6, maxNodes: 80)
+        let buttons = window.findAll(role: kAXButtonRole, limit: 6, maxNodes: 80, isCancelled: { runner.isCancelled })
         if let match = buttons.first(where: { button in
             let joined = [
                 button.identifier ?? "",

@@ -23,6 +23,15 @@ enum SelfTest {
             }, maxNodes: 0)
             return cancelled == nil && empty == nil && cancellationChecked && !predicateCalled
         }
+        check("검색 결과 전체 탐색도 취소 및 빈 제한에서 즉시 반환", failures: &failures) {
+            let root = UIElement(AXUIElementCreateApplication(-1))
+            var checked = false
+            var visited = false
+            let stopped = root.findAll(where: { _ in visited = true; return true }, limit: 10,
+                isCancelled: { checked = true; return true })
+            let empty = root.findAll(where: { _ in visited = true; return true }, limit: 10, maxNodes: 0)
+            return checked && !visited && stopped.isEmpty && empty.isEmpty
+        }
         check("AX 탐색은 순환 트리도 제한하고 탐색 중 취소를 반영", failures: &failures) {
             var visited = 0
             let bounded: Int? = UIElement.firstDescendant(

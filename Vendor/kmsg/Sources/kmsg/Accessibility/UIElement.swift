@@ -284,14 +284,15 @@ public final class UIElement: @unchecked Sendable {
     }
 
     /// Find descendants matching a predicate with early termination (breadth-first search)
-    public func findAll(where predicate: (UIElement) -> Bool, limit: Int, maxNodes: Int? = nil) -> [UIElement] {
+    public func findAll(where predicate: (UIElement) -> Bool, limit: Int, maxNodes: Int? = nil, isCancelled: () -> Bool = { false }) -> [UIElement] {
+        guard limit > 0, (maxNodes ?? .max) > 0, !isCancelled() else { return [] }
         var results: [UIElement] = []
         var queue = children
         var index = 0
         var visited = 0
         let nodeBudget = maxNodes ?? .max
 
-        while index < queue.count && results.count < limit && visited < nodeBudget {
+        while index < queue.count && results.count < limit && visited < nodeBudget && !isCancelled() {
             let current = queue[index]
             index += 1
             visited += 1
@@ -299,11 +300,11 @@ public final class UIElement: @unchecked Sendable {
                 results.append(current)
                 if results.count >= limit { break }
             }
-            if visited >= nodeBudget { break }
+            if visited >= nodeBudget || isCancelled() { break }
             queue.append(contentsOf: current.children)
         }
 
-        return results
+        return isCancelled() ? [] : results
     }
 
     /// Find first descendant matching a predicate (breadth-first search)
@@ -392,8 +393,8 @@ public final class UIElement: @unchecked Sendable {
     }
 
     /// Find elements by role with limit
-    public func findAll(role: String, limit: Int, maxNodes: Int? = nil) -> [UIElement] {
-        findAll(where: { $0.role == role }, limit: limit, maxNodes: maxNodes)
+    public func findAll(role: String, limit: Int, maxNodes: Int? = nil, isCancelled: () -> Bool = { false }) -> [UIElement] {
+        findAll(where: { $0.role == role }, limit: limit, maxNodes: maxNodes, isCancelled: isCancelled)
     }
 
     /// Find element by identifier

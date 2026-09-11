@@ -15,6 +15,20 @@ struct NoticeSenderApp: App {
         if arguments.contains("--self-test") {
             Darwin.exit(SelfTest.run())
         }
+        if let index = arguments.firstIndex(of: "--kakao-verify-room"), arguments.indices.contains(index + 1) {
+            let roomName = arguments[index + 1]
+            Task.detached {
+                do {
+                    _ = try await KmsgSafeAdapter().verifyByExactRoomSearch(roomName: roomName)
+                    print("KAKAO_ROOM_VERIFY_OK (no messages sent)")
+                    Darwin.exit(EXIT_SUCCESS)
+                } catch {
+                    fputs("방 열기 진단 실패: \(error.localizedDescription)\n", stderr)
+                    Darwin.exit(EXIT_FAILURE)
+                }
+            }
+            dispatchMain()
+        }
         if arguments.contains("--kakao-db-diagnostic") {
             Task.detached {
                 do {
