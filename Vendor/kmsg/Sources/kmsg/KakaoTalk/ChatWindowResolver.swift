@@ -815,6 +815,30 @@ struct ChatWindowResolver {
         let result = candidate.element
         var didTriggerAction = false
 
+        // The exact, unique result is already verified above. KakaoTalk's
+        // search field reliably opens its first result with Down+Enter, while
+        // virtual rows often reject AX focus and consume a full timeout.
+        kakao.activate()
+        if searchField.isFocused || runner.focusWithVerification(
+            searchField,
+            label: "search field exact-result selection",
+            attempts: 1
+        ) {
+            runner.pressDownArrowKey()
+            Thread.sleep(forTimeInterval: 0.03)
+            runner.pressEnterKey()
+            didTriggerAction = true
+            if runner.waitUntil(
+                label: "search open confirm (keyboard fast path)",
+                timeout: 1.2,
+                pollInterval: 0.05,
+                evaluateAfterTimeout: false,
+                condition: opened
+            ) {
+                return true
+            }
+        }
+
         // Lock the exact result into KakaoTalk's semantic table selection before
         // sending any key event. This prevents a stale selection from a previous
         // batch item from receiving Enter.
@@ -826,29 +850,6 @@ struct ChatWindowResolver {
             didTriggerAction = true
             if runner.waitUntil(
                 label: "search open confirm (selected exact result)",
-                timeout: 1.2,
-                pollInterval: 0.05,
-                evaluateAfterTimeout: false,
-                condition: opened
-            ) {
-                return true
-            }
-        }
-
-        // Some KakaoTalk versions expose a virtual row that can be selected but
-        // not focused. Fall back to the documented search-field keyboard
-        // selection contract without using screen geometry.
-        if searchField.isFocused || runner.focusWithVerification(
-            searchField,
-            label: "search field exact-result selection",
-            attempts: 1
-        ) {
-            runner.pressDownArrowKey()
-            Thread.sleep(forTimeInterval: 0.08)
-            runner.pressEnterKey()
-            didTriggerAction = true
-            if runner.waitUntil(
-                label: "search open confirm (keyboard selection)",
                 timeout: 1.2,
                 pollInterval: 0.05,
                 evaluateAfterTimeout: false,
