@@ -936,6 +936,34 @@ enum SelfTest {
             let result = try AttachmentScanner.scan(rootPath: root.path, students: [student])
             return result.scannedFileCount == 3 && result.filesByStudentID[student.id]?.count == 2
         }
+        check("첨부는 합격자 예외 없이 이름·학교·학번 모두 일치", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-identity-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let student = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 25, chatRoomName: "테스트방")
+            let otherSchool = Student(name: "홍길동", nickname: "길동이", school: "세종", admissionYear: 25, chatRoomName: "다른학교방")
+            let otherYear = Student(name: "홍길동", nickname: "길동이", school: "한성", admissionYear: 20, chatRoomName: "다른학번방")
+            let accepted = Student(name: "김합격A", nickname: "합격이", school: " 합격자 ", admissionYear: 27, chatRoomName: "합격방")
+            let filenames = ["한성25홍길동.pdf", "한성_2025_홍길동.txt", "홍길동.pdf", "한성홍길동.pdf", "25홍길동.pdf", "한성125홍길동.pdf", "한성2026홍길동.pdf", "김합격A.pdf", "합격이.pdf", "김합격.pdf", "합격자27김합격A.pdf"]
+            for filename in filenames { try Data().write(to: root.appendingPathComponent(filename)) }
+            let result = try AttachmentScanner.scan(rootPath: root.path, students: [student, otherSchool, otherYear, accepted])
+            return Set(result.filesByStudentID[student.id]?.map(\.lastPathComponent) ?? []) == Set(filenames.prefix(2))
+                && result.filesByStudentID[otherSchool.id]?.isEmpty == true
+                && result.filesByStudentID[otherYear.id]?.isEmpty == true
+                && result.filesByStudentID[accepted.id]?.map(\.lastPathComponent) == ["합격자27김합격A.pdf"]
+        }
+        check("세종26 김시우는 날짜의 26을 학번으로 오인하지 않고 1개만 매칭", failures: &failures) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("notice-sender-date-year-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let filenames = ["260904 세종25(금) 당일테스트 김시우.pdf", "260911 세종25(금A) 모의고사 1회차 김시우.pdf", "260913 세종26(일B) 모의고사 1회차 김시우.pdf"]
+            for filename in filenames {
+                try Data().write(to: root.appendingPathComponent(filename.decomposedStringWithCanonicalMapping))
+            }
+            let student = Student(name: "김시우", nickname: "시우", school: "세종", admissionYear: 26, chatRoomName: "테스트방")
+            let result = try AttachmentScanner.scan(rootPath: root.path, students: [student])
+            return result.filesByStudentID[student.id]?.map { $0.lastPathComponent.precomposedStringWithCanonicalMapping } == [filenames[2]]
+        }
         check("없는 첨부 폴더는 즉시 오류로 처리", failures: &failures) {
             let missing = FileManager.default.temporaryDirectory
                 .appendingPathComponent("notice-sender-missing-attachment-\(UUID().uuidString)")

@@ -70,12 +70,13 @@ enum AttachmentScanner {
         var matches = Dictionary(uniqueKeysWithValues: students.map { ($0.id, [URL]()) })
         for file in files {
             let filename = normalized(file.deletingPathExtension().lastPathComponent)
+            let yearTokens = filename.split { !$0.isNumber }.map(String.init)
             let candidates = identities.filter { identity in
-                guard !identity.school.isEmpty, !identity.fullName.isEmpty else { return false }
+                guard !identity.fullName.isEmpty, filename.contains(identity.fullName) else { return false }
+                guard !identity.school.isEmpty else { return false }
                 let longYear = "20\(identity.shortYear)"
                 return filename.contains(identity.school)
-                    && filename.contains(identity.fullName)
-                    && (filename.contains(identity.shortYear) || filename.contains(longYear))
+                    && (yearTokens.contains(identity.shortYear) || yearTokens.contains(longYear))
             }
 
             // If both `윤서진` and `윤서진A` exist, a file containing 윤서진A
