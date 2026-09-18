@@ -77,6 +77,7 @@ struct ChatWindowResolver {
     private let interactionMode: ChatWindowInteractionMode
     private let exactMatchOnly: Bool
     private let requireUniqueMatch: Bool
+    private let checkMultipleMatchesInOrder: Bool
 
     init(
         kakao: KakaoTalkApp,
@@ -86,7 +87,8 @@ struct ChatWindowResolver {
         layoutMode: ChatWindowLayoutMode = .preserve,
         interactionMode: ChatWindowInteractionMode = .allowUIAutomation,
         exactMatchOnly: Bool = false,
-        requireUniqueMatch: Bool = false
+        requireUniqueMatch: Bool = false,
+        checkMultipleMatchesInOrder: Bool = false
     ) {
         self.kakao = kakao
         self.runner = runner
@@ -96,6 +98,7 @@ struct ChatWindowResolver {
         self.interactionMode = interactionMode
         self.exactMatchOnly = exactMatchOnly
         self.requireUniqueMatch = requireUniqueMatch
+        self.checkMultipleMatchesInOrder = checkMultipleMatchesInOrder
     }
 
     func resolve(query: String) throws -> ChatWindowResolution {
@@ -343,13 +346,22 @@ struct ChatWindowResolver {
         try ensureNotCancelled()
         let matchingCandidates = waitForMatchingSearchResults(query: query, rootWindow: rootWindow)
         try ensureNotCancelled()
-        if requireUniqueMatch, matchingCandidates.count != 1 {
+        if requireUniqueMatch, !checkMultipleMatchesInOrder, matchingCandidates.count != 1 {
             runner.pressEscape()
             throw KakaoTalkError.actionFailed(
                 "[AMBIGUOUS_MATCH] Expected exactly one search result for '\(query)', found \(matchingCandidates.count)"
             )
         }
-        guard let matchingResult = pickBestSearchResult(from: matchingCandidates) else {
+        if checkMultipleMatchesInOrder, matchingCandidates.count > 1 {
+            return try openChatByCheckingSearchResultsInOrder(
+                query: query,
+                count: matchingCandidates.count,
+                rootWindow: rootWindow,
+                initialSearchField: searchField
+            )
+        }
+        let matchingResult = pickBestSearchResult(from: matchingCandidates)
+        guard let matchingResult else {
             runner.pressEscape()
             throw KakaoTalkError.elementNotFound("[\(ChatWindowFailureCode.searchMiss.rawValue)] No search result found for '\(query)'")
         }
@@ -373,6 +385,94 @@ struct ChatWindowResolver {
         }
 
         throw KakaoTalkError.windowNotFound("[\(ChatWindowFailureCode.windowNotReady.rawValue)] Chat window for '\(query)' did not open")
+    }
+
+    private func openChatByCheckingSearchResultsInOrder(
+        query: String,
+        count: Int,
+        rootWindow: UIElement,
+        initialSearchField: UIElement
+    ) throws -> UIElement {
+        var searchField = initialSearchField
+        for index in 0..<count {
+            try ensureNotCancelled()
+            if index > 0 {
+                kakao.activate()
+                _ = tryRaiseWindow(rootWindow)
+                guard let refreshedField = locateSearchField(in: rootWindow),
+                      runner.focusWithVerification(refreshedField, label: "search field", attempts: 1),
+                      runner.setTextWithVerification(query, on: refreshedField, label: "search field input", attempts: 1)
+                else { break }
+                searchField = refreshedField
+            }
+
+            let candidates = waitForMatchingSearchResults(query: query, rootWindow: rootWindow)
+            guard candidates.indices.contains(index) else { break }
+            let previousWindows = kakao.windows
+            var openedWindow: UIElement?
+            let opened = triggerSearchResultOpenInOrder(
+                candidates[index],
+                searchField: searchField,
+                preferKeyboardFirstResult: index == 0
+            ) {
+                openedWindow = openedCandidateWindow(excluding: previousWindows, rootWindow: rootWindow)
+                return openedWindow != nil
+            }
+            guard opened, let openedWindow else { continue }
+            if let title = openedWindow.title, scoreQueryMatch(query: query, candidateText: title) > 0 {
+                return openedWindow
+            }
+
+            runner.log("search: result \(index + 1) opened a different room; checking next result")
+            if !previousWindows.contains(where: { areSameAXElement($0, openedWindow) }) {
+                _ = closeWindow(openedWindow)
+            }
+        }
+
+        throw KakaoTalkError.windowNotFound("[\(ChatWindowFailureCode.windowNotReady.rawValue)] No searched room opened with the exact title '\(query)'")
+    }
+
+    private func triggerSearchResultOpenInOrder(
+        _ candidate: SearchCandidate,
+        searchField: UIElement,
+        preferKeyboardFirstResult: Bool,
+        opened: () -> Bool
+    ) -> Bool {
+        kakao.activate()
+        if preferKeyboardFirstResult,
+           searchField.isFocused || runner.focusWithVerification(searchField, label: "search field first-result selection", attempts: 1)
+        {
+            runner.pressDownArrowKey()
+            runner.pressEnterKey()
+            if runner.waitUntil(label: "search open confirm", timeout: 1.2, pollInterval: 0.05, evaluateAfterTimeout: false, condition: opened) {
+                return true
+            }
+        }
+
+        let selected = trySelectSearchResult(candidate.element, label: "ordered result")
+        let focused = focusSearchResult(candidate.element)
+        if selected || focused {
+            runner.pressEnterKey()
+            if runner.waitUntil(label: "search open confirm", timeout: 1.2, pollInterval: 0.05, evaluateAfterTimeout: false, condition: opened) {
+                return true
+            }
+        }
+        guard tryActivateSearchResult(candidate.element, label: "ordered result") else { return false }
+        return runner.waitUntil(label: "search open confirm", timeout: 0.5, pollInterval: 0.05, evaluateAfterTimeout: false, condition: opened)
+    }
+
+    private func openedCandidateWindow(excluding previousWindows: [UIElement], rootWindow: UIElement) -> UIElement? {
+        if let focusedWindow = kakao.focusedWindow,
+           !areSameAXElement(focusedWindow, rootWindow),
+           windowContainsLikelyChatInput(focusedWindow)
+        {
+            return focusedWindow
+        }
+        return kakao.windows.first { window in
+            !areSameAXElement(window, rootWindow)
+                && !previousWindows.contains(where: { areSameAXElement($0, window) })
+                && windowContainsLikelyChatInput(window)
+        }
     }
 
     private func openChatListRow(chatID: String, query: String, in chatListWindow: UIElement, fallbackWindow: UIElement) -> UIElement? {

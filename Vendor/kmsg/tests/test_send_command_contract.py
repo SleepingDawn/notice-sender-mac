@@ -4,6 +4,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEND_COMMAND = REPO_ROOT / "Sources" / "kmsg" / "Commands" / "SendCommand.swift"
+CHAT_WINDOW_RESOLVER = REPO_ROOT / "Sources" / "kmsg" / "KakaoTalk" / "ChatWindowResolver.swift"
+EMBEDDED_ENGINE = REPO_ROOT / "Sources" / "kmsg" / "NoticeSenderBridge" / "KmsgEmbeddedEngine.swift"
 
 
 class SendCommandContractTests(unittest.TestCase):
@@ -37,6 +39,16 @@ class SendCommandContractTests(unittest.TestCase):
         ]
         for helper in delegated_helpers:
             self.assertNotIn(helper, source)
+
+    def test_notice_sender_checks_multiple_matches_from_top_to_bottom(self) -> None:
+        resolver = CHAT_WINDOW_RESOLVER.read_text(encoding="utf-8")
+        engine = EMBEDDED_ENGINE.read_text(encoding="utf-8")
+
+        self.assertIn("checkMultipleMatchesInOrder: true", engine)
+        self.assertIn("for index in 0..<count", resolver)
+        self.assertIn("preferKeyboardFirstResult: index == 0", resolver)
+        self.assertIn("scoreQueryMatch(query: query, candidateText: title) > 0", resolver)
+        self.assertIn("result \\(index + 1) opened a different room; checking next result", resolver)
 
 
 if __name__ == "__main__":

@@ -169,8 +169,9 @@ public enum KmsgSendInteractionMode: Sendable {
 /// A narrow, fail-closed bridge around kmsg's AX resolver.
 ///
 /// NoticeSender deliberately exposes none of kmsg's fuzzy matching or forced
-/// typing behavior. The bridge requires an exact normalized title, a unique
-/// search result and one identifiable composer.
+/// typing behavior. The bridge requires an exact normalized title and one
+/// identifiable composer. When multiple title matches exist, it checks them
+/// from top to bottom and continues only after verifying the opened title.
 public enum KmsgEmbeddedEngine {
     public static let upstreamCommit = "fb70208286a1da3a404861dc944db470176155f6"
     public static let upstreamVersion = "1.260705.0"
@@ -295,7 +296,8 @@ public enum KmsgEmbeddedEngine {
                 layoutMode: .preserve,
                 interactionMode: interactionMode == .backgroundExistingChat ? .backgroundSafe : .allowUIAutomation,
                 exactMatchOnly: true,
-                requireUniqueMatch: true
+                requireUniqueMatch: true,
+                checkMultipleMatchesInOrder: true
             )
         }
 
