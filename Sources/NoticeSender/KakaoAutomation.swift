@@ -28,6 +28,7 @@ struct KakaoRunSummary: Identifiable, Sendable {
     var items: [BatchItem]
 
     var succeeded: Bool { failedCount == 0 && !wasStopped }
+    var shouldEmphasizeFailure: Bool { failedCount > 0 && !wasStopped }
 }
 
 enum BatchRunPolicy {
@@ -92,6 +93,7 @@ final class KakaoAutomationService: ObservableObject {
     @Published var shouldStop = false
     @Published var isRepairingAccessibility = false
     @Published private(set) var lastRunSummary: KakaoRunSummary?
+    @Published private(set) var failureAlertMessage: String?
 
     private let bundleIdentifier = "com.kakao.KakaoTalkMac"
     private let kmsg = KmsgSafeAdapter()
@@ -205,6 +207,7 @@ final class KakaoAutomationService: ObservableObject {
         isBusy = true
         shouldStop = false
         lastRunSummary = nil
+        failureAlertMessage = nil
         let cancellationToken = KmsgCancellationToken()
         activeCancellationToken = cancellationToken
         defer {
@@ -217,10 +220,12 @@ final class KakaoAutomationService: ObservableObject {
         store.validationIssues = runtimeIssues
         guard !runtimeIssues.contains(where: { $0.severity == .error }) else {
             statusText = "검증 오류가 있어 전송하지 않았습니다."
+            failureAlertMessage = statusText
             return
         }
         guard let application = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
             statusText = KakaoAutomationError.notRunning.localizedDescription
+            failureAlertMessage = statusText
             return
         }
         let accessibilityAvailable = await Task.detached(priority: .userInitiated) {
@@ -228,6 +233,7 @@ final class KakaoAutomationService: ObservableObject {
         }.value
         guard accessibilityAvailable else {
             statusText = KakaoAutomationError.accessibilityDenied.localizedDescription
+            failureAlertMessage = statusText
             return
         }
 
@@ -311,7 +317,7 @@ final class KakaoAutomationService: ObservableObject {
             statusText = dryRun ? "드라이런을 완료했습니다. 실제 메시지와 첨부파일은 전송하지 않았습니다." : "전송 요청을 모두 완료했습니다."
         }
         store.currentBatch = working
-        lastRunSummary = KakaoRunSummary(
+        let summary = KakaoRunSummary(
             batchID: working.id,
             dryRun: dryRun,
             totalCount: working.items.count,
@@ -322,6 +328,8 @@ final class KakaoAutomationService: ObservableObject {
             detail: statusText,
             items: working.items
         )
+        lastRunSummary = summary
+        if summary.shouldEmphasizeFailure { failureAlertMessage = summary.detail }
     }
 
     func stop() {
@@ -332,6 +340,10 @@ final class KakaoAutomationService: ObservableObject {
 
     func clearLastRunSummary() {
         lastRunSummary = nil
+    }
+
+    func clearFailureAlert() {
+        failureAlertMessage = nil
     }
 
     private func cancellationDetail(

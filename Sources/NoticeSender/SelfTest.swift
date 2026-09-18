@@ -176,6 +176,11 @@ enum SelfTest {
                     deliveryMayHaveStarted: false
                 ) == .failed
         }
+        check("발송 실패만 강조 알림 표시", failures: &failures) {
+            let failed = KakaoRunSummary(batchID: UUID(), dryRun: false, totalCount: 1, completedThisRun: 0, alreadySentCount: 0, failedCount: 1, wasStopped: false, detail: "실패", items: [])
+            let stopped = KakaoRunSummary(batchID: UUID(), dryRun: false, totalCount: 1, completedThisRun: 0, alreadySentCount: 0, failedCount: 1, wasStopped: true, detail: "중지", items: [])
+            return failed.shouldEmphasizeFailure && !stopped.shouldEmphasizeFailure
+        }
         check("발송 전 일시 오류만 1회 안전 복구", failures: &failures) {
             let retryable = [
                 "[WINDOW_NOT_READY] Chat window did not open",

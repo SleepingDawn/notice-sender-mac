@@ -1446,6 +1446,14 @@ struct LessonManagementView: View {
         } message: {
             Text(pendingLessonSendConfirmationText)
         }
+        .alert("발송에 실패했습니다.", isPresented: Binding(
+            get: { kakao.failureAlertMessage != nil },
+            set: { if !$0 { kakao.clearFailureAlert() } }
+        )) {
+            Button("확인") { kakao.clearFailureAlert() }
+        } message: {
+            Text(kakao.failureAlertMessage ?? "발송 기록에서 실패 원인을 확인해주세요.")
+        }
     }
 
     private var commonMessageSection: some View {
