@@ -419,10 +419,10 @@ public enum KmsgEmbeddedEngine {
             }
         }
 
-        for attachmentURL in attachmentURLs {
+        if !attachmentURLs.isEmpty {
             try throwIfCancelled(cancellationToken)
-            try sendAttachment(
-                attachmentURL,
+            try sendAttachments(
+                attachmentURLs,
                 in: resolution.window,
                 composer: composer,
                 application: kakao.applicationElement,
@@ -454,8 +454,8 @@ public enum KmsgEmbeddedEngine {
         }
     }
 
-    private static func sendAttachment(
-        _ fileURL: URL,
+    private static func sendAttachments(
+        _ fileURLs: [URL],
         in window: UIElement,
         composer: UIElement,
         application: UIElement,
@@ -463,27 +463,24 @@ public enum KmsgEmbeddedEngine {
         runner: AXActionRunner,
         cancellationToken: KmsgCancellationToken?
     ) throws {
-        let filename = fileURL.lastPathComponent
-        cancellationToken?.setCurrentActivityDescription("첨부파일 준비: \(filename)")
+        let filenames = fileURLs.map(\.lastPathComponent)
+        let attachmentLabel = filenames.count == 1 ? filenames[0] : "\(filenames.count)개 파일"
+        cancellationToken?.setCurrentActivityDescription("첨부파일 준비: \(attachmentLabel)")
         guard let transcriptTable = transcriptTable(in: window) else {
-            throw KmsgEmbeddedError.attachmentPreviewNotFound(filename)
+            throw KmsgEmbeddedError.attachmentPreviewNotFound(attachmentLabel)
         }
         let rowsBeforePaste = transcriptRows(in: transcriptTable).count
-        let filenameCountBeforePaste = attachmentFilenameCount(
-            filename,
-            in: transcriptTable
-        )
 
-        let writeFileURLToPasteboard = {
+        let writeFileURLsToPasteboard = {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
-            return pasteboard.writeObjects([fileURL as NSURL])
+            return pasteboard.writeObjects(fileURLs.map { $0 as NSURL })
         }
         let copied = Thread.isMainThread
-            ? writeFileURLToPasteboard()
-            : DispatchQueue.main.sync(execute: writeFileURLToPasteboard)
+            ? writeFileURLsToPasteboard()
+            : DispatchQueue.main.sync(execute: writeFileURLsToPasteboard)
         guard copied else {
-            throw KmsgEmbeddedError.attachmentMissing(fileURL.path)
+            throw KmsgEmbeddedError.attachmentMissing(attachmentLabel)
         }
 
         kakao.activate()
@@ -491,18 +488,18 @@ public enum KmsgEmbeddedEngine {
             throw KmsgEmbeddedError.composerFocusFailed
         }
         runner.pressPaste()
-        runner.log("attachment: pasted file URL '\(filename)'")
+        runner.log("attachment: pasted \(filenames.count) file URL(s)")
 
-        cancellationToken?.setCurrentActivityDescription("첨부파일 미리보기 확인: \(filename)")
+        cancellationToken?.setCurrentActivityDescription("첨부파일 미리보기 확인: \(attachmentLabel)")
         var previewSurface: UIElement?
         let previewFound = runner.waitUntil(
-            label: "attachment preview \(filename)",
+            label: "attachment preview \(attachmentLabel)",
             timeout: 5.0,
             pollInterval: 0.1
         ) {
             if cancellationToken?.isCancelled == true { return false }
             previewSurface = attachmentPreviewSurface(
-                filename: filename,
+                filenames: filenames,
                 window: window,
                 application: application
             )
@@ -510,11 +507,11 @@ public enum KmsgEmbeddedEngine {
         }
         guard previewFound, let previewSurface else {
             try throwIfCancelled(cancellationToken)
-            throw KmsgEmbeddedError.attachmentPreviewNotFound(filename)
+            throw KmsgEmbeddedError.attachmentPreviewNotFound(attachmentLabel)
         }
 
         cancellationToken?.setCurrentActivityDescription(
-            "첨부파일 전송 요청: \(filename)",
+            "첨부파일 전송 요청: \(attachmentLabel)",
             deliveryMayHaveStarted: true
         )
         if let sendButton = attachmentSendButton(in: previewSurface) {
@@ -524,7 +521,7 @@ public enum KmsgEmbeddedEngine {
                 // remains the active focused surface, so Enter is the stable
                 // semantic fallback used by KakaoTalk's own default action.
                 if attachmentPreviewSurface(
-                    filename: filename,
+                    filenames: filenames,
                     window: window,
                     application: application
                 ) != nil {
@@ -544,12 +541,12 @@ public enum KmsgEmbeddedEngine {
         }
 
         cancellationToken?.setCurrentActivityDescription(
-            "첨부파일 업로드 완료 확인: \(filename)",
+            "첨부파일 업로드 완료 확인: \(attachmentLabel)",
             deliveryMayHaveStarted: true
         )
         let completed = runner.waitUntil(
-            label: "attachment upload completion \(filename)",
-            timeout: attachmentUploadTimeout(for: fileURL),
+            label: "attachment upload completion \(attachmentLabel)",
+            timeout: attachmentUploadTimeout(for: fileURLs),
             pollInterval: 0.15,
             evaluateAfterTimeout: false
         ) {
@@ -559,26 +556,22 @@ public enum KmsgEmbeddedEngine {
                 window: window,
                 application: application
             )
-            let countNow = attachmentFilenameCount(filename, in: transcriptTable)
-            let rowCountNow = transcriptRows(in: transcriptTable).count
-            let appendedToTranscript = rowCountNow > rowsBeforePaste
-                || countNow > filenameCountBeforePaste
             return previewGone
-                && appendedToTranscript
-                && attachmentTranscriptEntryIsComplete(
-                    filename: filename,
+                && attachmentTranscriptEntriesAreComplete(
+                    filenames: filenames,
+                    afterRowCount: rowsBeforePaste,
                     in: transcriptTable
                 )
         }
         guard completed else {
             try throwIfCancelled(cancellationToken)
-            throw KmsgEmbeddedError.attachmentUploadTimedOut(filename)
+            throw KmsgEmbeddedError.attachmentUploadTimedOut(attachmentLabel)
         }
-        runner.log("attachment: upload completed and transcript entry verified for '\(filename)'")
+        runner.log("attachment: \(filenames.count) upload(s) completed and transcript entries verified")
     }
 
     private static func attachmentPreviewSurface(
-        filename: String,
+        filenames: [String],
         window: UIElement,
         application: UIElement
     ) -> UIElement? {
@@ -587,7 +580,7 @@ public enum KmsgEmbeddedEngine {
             surfaces.append(contentsOf: sheets.map(UIElement.init))
         }
         if let matchingSheet = surfaces.first(where: { surface in
-            elementTreeContains(filename: filename, root: surface, maxNodes: 1_200)
+            attachmentPreviewContains(filenames: filenames, root: surface)
         }) {
             return matchingSheet
         }
@@ -599,7 +592,7 @@ public enum KmsgEmbeddedEngine {
             var hops = 0
             while let current = cursor, hops < 12 {
                 if (current.role == kAXSheetRole || current.role == "AXDialog"),
-                   elementTreeContains(filename: filename, root: current, maxNodes: 400) {
+                   attachmentPreviewContains(filenames: filenames, root: current) {
                     return current
                 }
                 cursor = current.parent
@@ -609,8 +602,29 @@ public enum KmsgEmbeddedEngine {
         return application.findAll(where: { element in
             element.role == kAXSheetRole || element.role == "AXDialog"
         }, limit: 4, maxNodes: 400).first { candidate in
-            elementTreeContains(filename: filename, root: candidate, maxNodes: 400)
+            attachmentPreviewContains(filenames: filenames, root: candidate)
         }
+    }
+
+    private static func attachmentPreviewContains(filenames: [String], root: UIElement) -> Bool {
+        let expectedCounts = Dictionary(
+            grouping: filenames.map(canonicalAttachmentText),
+            by: { $0 }
+        ).mapValues { $0.count }
+        let rows = root.findAll(
+            role: kAXRowRole,
+            limit: max(30, filenames.count * 2),
+            maxNodes: max(600, filenames.count * 80)
+        )
+        if !rows.isEmpty {
+            return expectedCounts.allSatisfy { filename, count in
+                rows.filter {
+                    elementTreeContains(filename: filename, root: $0, maxNodes: 120)
+                }.count >= count
+            }
+        }
+        return filenames.count == 1
+            && elementTreeContains(filename: filenames[0], root: root, maxNodes: 1_200)
     }
 
     private static func attachmentSendButton(in surface: UIElement) -> UIElement? {
@@ -627,14 +641,6 @@ public enum KmsgEmbeddedEngine {
                     || value.hasSuffix("전송")
                     || value.hasPrefix("send ")
             }
-        }
-    }
-
-    private static func attachmentFilenameCount(_ filename: String, in table: UIElement) -> Int {
-        let expected = canonicalAttachmentText(filename)
-        guard !expected.isEmpty else { return 0 }
-        return recentTranscriptRows(in: table).reduce(into: 0) { count, row in
-            count += matchingFilenameNodeCount(expected: expected, in: row)
         }
     }
 
@@ -674,17 +680,6 @@ public enum KmsgEmbeddedEngine {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func matchingFilenameNodeCount(expected: String, in root: UIElement) -> Int {
-        let rootCount = semanticAttachmentTexts(of: root).contains {
-            canonicalAttachmentText($0).contains(expected)
-        } ? 1 : 0
-        return rootCount + root.findAll(where: { element in
-            semanticAttachmentTexts(of: element).contains { text in
-                canonicalAttachmentText(text).contains(expected)
-            }
-        }, limit: 50, maxNodes: 350).count
-    }
-
     private static func transcriptTable(in window: UIElement) -> UIElement? {
         window.findAll(role: kAXTableRole, limit: 3, maxNodes: 120).max {
             transcriptRows(in: $0).count < transcriptRows(in: $1).count
@@ -693,10 +688,6 @@ public enum KmsgEmbeddedEngine {
 
     private static func transcriptRows(in table: UIElement) -> [UIElement] {
         table.children.filter { $0.role == kAXRowRole }
-    }
-
-    private static func recentTranscriptRows(in table: UIElement) -> [UIElement] {
-        Array(transcriptRows(in: table).suffix(6))
     }
 
     private static func isAttachmentPreviewStillOpen(
@@ -746,17 +737,30 @@ public enum KmsgEmbeddedEngine {
         )
     }
 
-    private static func attachmentTranscriptEntryIsComplete(
-        filename: String,
+    private static func attachmentTranscriptEntriesAreComplete(
+        filenames: [String],
+        afterRowCount: Int,
         in table: UIElement
     ) -> Bool {
-        let expected = canonicalAttachmentText(filename)
-        let matchingRows = recentTranscriptRows(in: table).filter { row in
-            matchingFilenameNodeCount(expected: expected, in: row) > 0
+        let rows = transcriptRows(in: table)
+        guard rows.count > afterRowCount else { return false }
+        let appendedRows = rows.dropFirst(afterRowCount)
+        let expectedCounts = Dictionary(
+            grouping: filenames.map(canonicalAttachmentText),
+            by: { $0 }
+        ).mapValues { $0.count }
+        return expectedCounts.allSatisfy { filename, count in
+            appendedRows.filter {
+                attachmentTranscriptRowIsComplete(filename: filename, row: $0)
+            }.count >= count
         }
-        guard let newestRow = matchingRows.last else { return false }
+    }
 
-        let nodes = [newestRow] + newestRow.findAll(where: { _ in true }, limit: 120, maxNodes: 350)
+    private static func attachmentTranscriptRowIsComplete(filename: String, row: UIElement) -> Bool {
+        guard elementTreeContains(filename: filename, root: row, maxNodes: 350) else {
+            return false
+        }
+        let nodes = [row] + row.findAll(where: { _ in true }, limit: 120, maxNodes: 350)
         let metadata = canonicalAttachmentText(
             nodes.flatMap(semanticAttachmentTexts).joined(separator: " ")
         )
@@ -770,10 +774,13 @@ public enum KmsgEmbeddedEngine {
         return readyActions.contains { metadata.contains($0) }
     }
 
-    private static func attachmentUploadTimeout(for fileURL: URL) -> TimeInterval {
-        let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey])
-        let sizeInMB = Double(values?.fileSize ?? 0) / 1_000_000
-        return min(max(120, 30 + sizeInMB * 8), 600)
+    private static func attachmentUploadTimeout(for fileURLs: [URL]) -> TimeInterval {
+        let totalBytes = fileURLs.reduce(0) { total, fileURL in
+            let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey])
+            return total + (values?.fileSize ?? 0)
+        }
+        let sizeInMB = Double(totalBytes) / 1_000_000
+        return min(max(120, 30 + sizeInMB * 8 + Double(fileURLs.count) * 5), 600)
     }
 
     private static func throwIfCancelled(_ token: KmsgCancellationToken?) throws {

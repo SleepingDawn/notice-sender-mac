@@ -50,6 +50,15 @@ class SendCommandContractTests(unittest.TestCase):
         self.assertIn("scoreQueryMatch(query: query, candidateText: title) > 0", resolver)
         self.assertIn("result \\(index + 1) opened a different room; checking next result", resolver)
 
+    def test_notice_sender_pastes_all_attachments_as_one_batch(self) -> None:
+        source = EMBEDDED_ENGINE.read_text(encoding="utf-8")
+
+        self.assertNotIn("for attachmentURL in attachmentURLs", source)
+        self.assertIn("try sendAttachments(\n                attachmentURLs,", source)
+        self.assertIn("pasteboard.writeObjects(fileURLs.map { $0 as NSURL })", source)
+        self.assertIn("attachmentPreviewContains(filenames: filenames", source)
+        self.assertIn("attachmentTranscriptEntriesAreComplete(", source)
+
 
 if __name__ == "__main__":
     unittest.main()
