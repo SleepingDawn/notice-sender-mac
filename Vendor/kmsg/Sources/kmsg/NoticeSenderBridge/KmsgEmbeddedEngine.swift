@@ -743,8 +743,9 @@ public enum KmsgEmbeddedEngine {
         in table: UIElement
     ) -> Bool {
         let rows = transcriptRows(in: table)
-        guard rows.count > afterRowCount else { return false }
-        let appendedRows = rows.dropFirst(afterRowCount)
+        guard rows.count >= afterRowCount + filenames.count else { return false }
+        // KakaoTalk reuses the trailing empty transcript row for the first file.
+        let appendedRows = rows.dropFirst(max(0, afterRowCount - 1))
         let expectedCounts = Dictionary(
             grouping: filenames.map(canonicalAttachmentText),
             by: { $0 }

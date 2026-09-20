@@ -58,6 +58,8 @@ class SendCommandContractTests(unittest.TestCase):
         self.assertIn("pasteboard.writeObjects(fileURLs.map { $0 as NSURL })", source)
         self.assertIn("attachmentPreviewContains(filenames: filenames", source)
         self.assertIn("attachmentTranscriptEntriesAreComplete(", source)
+        self.assertIn("rows.count >= afterRowCount + filenames.count", source)
+        self.assertIn("rows.dropFirst(max(0, afterRowCount - 1))", source)
 
 
 if __name__ == "__main__":
