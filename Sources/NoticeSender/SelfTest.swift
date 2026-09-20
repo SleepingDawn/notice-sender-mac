@@ -416,8 +416,17 @@ enum SelfTest {
             let students = [targetB, wrongSchool, inactive, wrongYear, targetA]
             let filtered = ClassStudentFilter.students(in: students, school: " 한성 ", admissionYear: 0)
             return filtered.map(\.name) == ["김길동", "박하연"]
+                && ClassStudentFilter.students(in: students, school: ClassStudentFilter.admittedClassSchool, admissionYear: 0).map(\.name) == ["김길동", "김세종", "박하연"]
                 && ClassStudentFilter.students(in: students, school: "", admissionYear: 0).isEmpty
                 && ClassStudentFilter.students(in: students, school: "한성", admissionYear: nil).isEmpty
+        }
+        check("학생 DB 상태·chat_id 열 정렬", failures: &failures) {
+            let inactive = Student(name: "비활성", nickname: "비활성", school: "한성", admissionYear: 25, chatRoomName: "B방", chatID: "chat-b", isActive: false)
+            let active = Student(name: "활성", nickname: "활성", school: "한성", admissionYear: 25, chatRoomName: "A방", chatID: nil)
+            let statusOrder = [inactive, active].sorted(using: [KeyPathComparator(\Student.studentDatabaseStatusSortKey)])
+            let chatIDOrder = [inactive, active].sorted(using: [KeyPathComparator(\Student.studentDatabaseChatIDSortKey)])
+            return statusOrder.map(\.id) == [active.id, inactive.id]
+                && chatIDOrder.map(\.id) == [active.id, inactive.id]
         }
         check("반 명단 성명순 정렬", failures: &failures) {
             let studentC = Student(name: "이민준", nickname: "민준이", school: "한성", admissionYear: 25, chatRoomName: "C방")
@@ -615,6 +624,15 @@ enum SelfTest {
                 && PreparedNoticeSelection.includedRows(rows).map(\.id) == [included.id]
                 && PreparedNoticeSelection.directMessagesAreReady(in: rows)
                 && !PreparedNoticeSelection.directMessagesAreReady(in: [excluded])
+        }
+        check("학생별 메시지 전부 삭제는 발송 선택을 유지", failures: &failures) {
+            let included = PreparedNoticeRow(id: UUID(), number: 1, name: "김길동", nickname: "길동이", noticeMessage: "학생별 공지")
+            var excluded = PreparedNoticeRow(id: UUID(), number: 2, name: "박하연", nickname: "하연이", noticeMessage: "제외 학생 공지")
+            excluded.isIncluded = false
+            let cleared = PreparedNoticeSelection.clearingMessages(in: [included, excluded])
+            return cleared.allSatisfy { $0.noticeMessage.isEmpty }
+                && cleared.map(\.isIncluded) == [true, false]
+                && cleared.map(\.name) == ["김길동", "박하연"]
         }
         check("스프레드시트 셀 한글 다중 입력·Backspace", failures: &failures) {
             let editor = SpreadsheetTextView(frame: NSRect(x: 0, y: 0, width: 180, height: SpreadsheetCanvas.rowHeight))

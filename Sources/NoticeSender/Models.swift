@@ -133,13 +133,16 @@ enum ClassMemberSorter {
 }
 
 enum ClassStudentFilter {
+    static let admittedClassSchool = "합격자"
+
     static func students(in databaseStudents: [Student], school: String, admissionYear: Int?) -> [Student] {
         let normalizedSchool = school.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedSchool.isEmpty, let admissionYear else { return [] }
         return databaseStudents
             .filter {
                 $0.isActive &&
-                $0.school.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(normalizedSchool) == .orderedSame &&
+                (normalizedSchool == admittedClassSchool ||
+                    $0.school.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(normalizedSchool) == .orderedSame) &&
                 $0.admissionYear == admissionYear
             }
             .sorted {

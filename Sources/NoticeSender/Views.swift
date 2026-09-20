@@ -278,6 +278,7 @@ struct StudentsView: View {
     @EnvironmentObject private var kakao: KakaoAutomationService
     @State private var search = ""
     @State private var school = "전체"
+    @State private var sortOrder = [KeyPathComparator(\Student.name)]
     @State private var editing: Student?
     @State private var adding = false
     @State private var selectedStudentIDs = Set<UUID>()
@@ -288,7 +289,7 @@ struct StudentsView: View {
         store.database.students.filter {
             (school == "전체" || $0.school == school) &&
             (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.chatRoomName.localizedCaseInsensitiveContains(search))
-        }
+        }.sorted(using: sortOrder)
     }
 
     var body: some View {
@@ -327,14 +328,14 @@ struct StudentsView: View {
                 Button("복원") { restoreBackup() }
             }
             HStack { TextField("이름 또는 톡방 검색", text: $search).textFieldStyle(.roundedBorder); Picker("학교", selection: $school) { ForEach(schools, id: \.self) { Text($0) } }.frame(width: 160) }
-            Table(filtered, selection: $selectedStudentIDs) {
-                TableColumn("상태") { Text($0.isActive ? "활성" : "비활성").foregroundStyle($0.isActive ? .green : .secondary) }.width(60)
+            Table(filtered, selection: $selectedStudentIDs, sortOrder: $sortOrder) {
+                TableColumn("상태", value: \.studentDatabaseStatusSortKey) { Text($0.isActive ? "활성" : "비활성").foregroundStyle($0.isActive ? .green : .secondary) }.width(60)
                 TableColumn("이름", value: \.name).width(90)
                 TableColumn("호칭", value: \.nickname).width(90)
                 TableColumn("학교", value: \.school).width(70)
-                TableColumn("학번") { Text(AdmissionYearPolicy.formatted($0.admissionYear)) }.width(55)
+                TableColumn("학번", value: \.admissionYear) { Text(AdmissionYearPolicy.formatted($0.admissionYear)) }.width(55)
                 TableColumn("정확한 톡방 이름", value: \.chatRoomName)
-                TableColumn("chat_id") { Text($0.chatID ?? "—").foregroundStyle(.secondary) }.width(145)
+                TableColumn("chat_id", value: \.studentDatabaseChatIDSortKey) { Text($0.chatID ?? "—").foregroundStyle(.secondary) }.width(145)
                 TableColumn("") { student in Button("수정") { editing = student }.buttonStyle(.borderless) }.width(45)
             }
         }.padding(20)
@@ -384,6 +385,11 @@ struct StudentsView: View {
             }
         }
     }
+}
+
+extension Student {
+    var studentDatabaseStatusSortKey: Int { isActive ? 0 : 1 }
+    var studentDatabaseChatIDSortKey: String { chatID ?? "" }
 }
 
 struct StudentEditor: View {
@@ -752,7 +758,7 @@ struct ClassCreator: View {
 
     private var schools: [String] {
         Set(store.database.students.filter(\.isActive).map { $0.school.trimmingCharacters(in: .whitespacesAndNewlines) })
-            .filter { !$0.isEmpty }
+            .filter { !$0.isEmpty && $0 != ClassStudentFilter.admittedClassSchool }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
@@ -760,7 +766,8 @@ struct ClassCreator: View {
         guard !school.isEmpty else { return [] }
         let studentYears = Set(store.database.students.filter {
             $0.isActive &&
-            $0.school.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(school) == .orderedSame
+            (school == ClassStudentFilter.admittedClassSchool ||
+                $0.school.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(school) == .orderedSame)
         }.map(\.admissionYear))
         return studentYears.filter(AdmissionYearPolicy.isValid).sorted()
     }
@@ -775,6 +782,7 @@ struct ClassCreator: View {
             TextField("반 이름", text: $name)
             Picker("학교", selection: $school) {
                 Text("학교 선택").tag("")
+                Text("합격자 (모든 학교)").tag(ClassStudentFilter.admittedClassSchool)
                 ForEach(schools, id: \.self) { Text($0).tag($0) }
             }
             Picker("학번", selection: $year) {
@@ -801,7 +809,7 @@ struct ClassCreator: View {
                 }
                 List(filteredStudents) { student in
                     Toggle(isOn: studentSelectionBinding(student.id, selection: $selected)) {
-                        Text("\(student.name) · \(student.chatRoomName)")
+                        Text("\(school == ClassStudentFilter.admittedClassSchool ? "\(student.school) · " : "")\(student.name) · \(student.chatRoomName)")
                     }
                     .toggleStyle(.checkbox)
                 }
@@ -1160,6 +1168,8 @@ private struct LessonInputSnapshot: Hashable {
     var homeworkMaximum: String
     var testMaximum: String
     var mockMaximums: [String]
+    var isCommonMessageEnabled: Bool
+    var commonMessages: [String]
 }
 
 struct UnifiedLessonSendingView: View {
@@ -1198,6 +1208,7 @@ struct LessonManagementView: View {
     @State private var lessonAttachmentScanError: String?
     @State private var pendingLessonBatch: SendBatch?
     @State private var showingLessonSendConfirmation = false
+    @State private var showingClearMessagesConfirmation = false
 
     private var group: ClassGroup? { store.group(id: draft.classID) }
     private var preset: MessagePreset? { store.database.presets.first { $0.id == draft.presetID } }
@@ -1226,6 +1237,10 @@ struct LessonManagementView: View {
 
     private var effectiveCommonMessages: [String] {
         CommonMessagePolicy.effectiveMessages(isEnabled: isCommonMessageEnabled, texts: commonMessages)
+    }
+
+    private var hasMessageContent: Bool {
+        !draft.notice.isEmpty || performanceRows.contains { !$0.noticeMessage.isEmpty } || commonMessages.contains { !$0.isEmpty }
     }
 
     private var previewRows: [LessonPreviewRow] {
@@ -1331,6 +1346,10 @@ struct LessonManagementView: View {
                 Button { undoLastInput() } label: { Label("입력 뒤로가기", systemImage: "arrow.uturn.backward") }
                     .keyboardShortcut("z", modifiers: .command)
                     .disabled(inputHistory.isEmpty || kakao.isBusy || isPreparingSend)
+                Button(role: .destructive) { showingClearMessagesConfirmation = true } label: {
+                    Label("메시지 전부 삭제", systemImage: "trash")
+                }
+                .disabled(!hasMessageContent || kakao.isBusy || isPreparingSend)
                 if kakao.isBusy {
                     Button("즉시 중지", role: .destructive) { kakao.stop() }
                 }
@@ -1446,6 +1465,12 @@ struct LessonManagementView: View {
         } message: {
             Text(pendingLessonSendConfirmationText)
         }
+        .alert("메시지를 모두 삭제할까요?", isPresented: $showingClearMessagesConfirmation) {
+            Button("취소", role: .cancel) { }
+            Button("메시지 전부 삭제", role: .destructive) { clearAllMessages() }
+        } message: {
+            Text("공지와 학생별·공통 메시지를 삭제합니다. 진도·숙제·성적·발송 선택·발송 기록은 유지되며 입력 뒤로가기로 되돌릴 수 있습니다.")
+        }
         .alert("발송에 실패했습니다.", isPresented: Binding(
             get: { kakao.failureAlertMessage != nil },
             set: { if !$0 { kakao.clearFailureAlert() } }
@@ -1508,6 +1533,15 @@ struct LessonManagementView: View {
         } else {
             commonMessages.remove(at: index)
         }
+    }
+
+    private func clearAllMessages() {
+        recordUndoSnapshot()
+        draft.notice = ""
+        performanceRows = PreparedNoticeSelection.clearingMessages(in: performanceRows)
+        commonMessages = [""]
+        invalidateLessonBatchForSelectionChange()
+        store.banner = "공지와 학생별·공통 메시지를 모두 삭제했습니다."
     }
 
     private var lessonAttachmentFolderSection: some View {
@@ -1865,7 +1899,15 @@ struct LessonManagementView: View {
     }
 
     private func recordUndoSnapshot() {
-        let snapshot = LessonInputSnapshot(draft: draft, rows: performanceRows, homeworkMaximum: homeworkMaximum, testMaximum: testMaximum, mockMaximums: mockMaximums)
+        let snapshot = LessonInputSnapshot(
+            draft: draft,
+            rows: performanceRows,
+            homeworkMaximum: homeworkMaximum,
+            testMaximum: testMaximum,
+            mockMaximums: mockMaximums,
+            isCommonMessageEnabled: isCommonMessageEnabled,
+            commonMessages: commonMessages
+        )
         guard inputHistory.last != snapshot else { return }
         inputHistory.append(snapshot)
         if inputHistory.count > 100 { inputHistory.removeFirst(inputHistory.count - 100) }
@@ -1878,6 +1920,8 @@ struct LessonManagementView: View {
         homeworkMaximum = snapshot.homeworkMaximum
         testMaximum = snapshot.testMaximum
         mockMaximums = snapshot.mockMaximums
+        isCommonMessageEnabled = snapshot.isCommonMessageEnabled
+        commonMessages = snapshot.commonMessages
         store.banner = "마지막 입력 작업을 되돌렸습니다."
     }
 
@@ -2219,6 +2263,14 @@ struct PreparedMockExam: Hashable {
 enum PreparedNoticeSelection {
     static func includedRows(_ rows: [PreparedNoticeRow]) -> [PreparedNoticeRow] {
         rows.filter(\.isIncluded)
+    }
+
+    static func clearingMessages(in rows: [PreparedNoticeRow]) -> [PreparedNoticeRow] {
+        rows.map { row in
+            var cleared = row
+            cleared.noticeMessage = ""
+            return cleared
+        }
     }
 
     static func directMessagesAreReady(in rows: [PreparedNoticeRow], allowEmptyMessages: Bool = false) -> Bool {
