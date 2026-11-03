@@ -7,6 +7,7 @@ internal static class LiveSmoke
     // These modes are never invoked by the default safety test run.
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Contains("--live-discard-synthetic-draft")) return await SyntheticDraftCleanup.RunAsync(args);
         if (args.Contains("--live-inspect"))
         {
             if (args.Contains("--live-bot-smoke") || args.Contains("--live-dry-run")) { Console.Error.WriteLine("Inspect must be used alone."); return 2; }

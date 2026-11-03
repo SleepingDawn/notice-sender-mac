@@ -25,6 +25,17 @@ internal static class BotSendTestSmokeTests
         foreach (string room in new[] { "카카오톡 선물하기", "지모", "KREAM" })
             Require(BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", room, "--acknowledge-bot-only", "--report", "report.json" }).Room == room, "허용 봇 이름 변경");
         Require(BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence" }).CaptureEvidence, "선택적 봇 증거 캡처 인수 무시");
+        Require(!BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json" }).ReplaceReviewedBotCue, "일반 봇 확인만으로 기존 문구 교체 허용");
+        Require(BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--replace-reviewed-bot-cue" }).ReplaceReviewedBotCue, "명시 안내 문구 교체 허용 무시");
+        Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--replace-reviewed-bot-cue" });
+        Require(BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "카카오톡 선물하기", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files", "--step", "D" }).Room == "카카오톡 선물하기", "명시 합성 파일 확인 시험 인수 무시");
+        Require(BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "카카오톡 선물하기", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files", "--step", "D" }).ConfirmNativeBotFiles, "네이티브 파일 확인 허용 옵션 누락");
+        Require(!BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "카카오톡 선물하기", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--step", "D" }).ConfirmNativeBotFiles, "명시 옵션 없이 네이티브 파일 확인 허용");
+        Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--confirm-native-bot-files", "--step", "D" });
+        Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files" });
+        Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files", "--step", "A" });
+        Require(BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--step", "B" }).OnlyStep == "B", "선택 테스트 단계 무시");
+        Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--step", "G" });
         foreach (string room in new[] { "", "KREAM ", "kream", "개인 학생 방" })
             Reject(new[] { "--bot-send-test", "--room", room, "--acknowledge-bot-only", "--report", "report.json" });
         Reject(new[] { "--bot-send-test", "--room", "KREAM", "--report", "report.json" });
@@ -70,6 +81,13 @@ internal static class BotSendTestSmokeTests
             using (var json = JsonDocument.Parse(File.ReadAllText(path)))
                 Require(json.RootElement.GetProperty("mode").GetString() == "bot-send-test" && json.RootElement.GetProperty("completed").GetBoolean(), "최종 봇 JSON 누락");
             Require(snapshots.Count > 6 && snapshots.Any(s => { using var d = JsonDocument.Parse(s); return d.RootElement.GetProperty("successCount").GetInt32() == 1; }), "단계별 봇 JSON 누락");
+            Require(result.FullSuitePassed, "전체 테스트와 선택 테스트 구분 누락");
+
+            fake = new FakeBotClient();
+            result = await new BotSendTestRunner(fake, fake).RunAsync("KREAM", true, Path.Combine(folder, "only-B.json"), null, CancellationToken.None, onlyStep: "B");
+            artifactFolders.Add(result.ArtifactDirectory!);
+            Require(result.Success && !result.FullSuitePassed && result.OnlyStep == "B" && result.RequestedCount == 1 && result.Steps.Single().Id == "B"
+                && fake.Calls.Select(c => c.Operation).SequenceEqual(new[] { "open", "resolve", "resolve", "text", "files", "complete" }), "선택 단계 이외 메시지 전송 / 전체 통과 오판");
 
             fake = new FakeBotClient { FailFirstFiles = true };
             result = await new BotSendTestRunner(fake, fake).RunAsync("지모", true, Path.Combine(folder, "failure.json"), null, CancellationToken.None);
@@ -100,7 +118,7 @@ internal static class BotSendTestSmokeTests
             result = await new BotSendTestRunner(fake, fake, new ThrowingEvidenceCapture()).RunAsync("KREAM", true, Path.Combine(folder, "evidence-errors.json"), null, CancellationToken.None);
             artifactFolders.Add(result.ArtifactDirectory!);
             Require(result.Steps[0].Status == "passed" && result.Steps[1].Status == "failed" && result.Failure == "합성 파일 테스트 실패", "증거 캡처 오류가 원래 전송 결과를 변경했습니다.");
-            Require(result.Evidence.Count == 8 && result.Evidence.All(e => e.Error == "합성 증거 캡처 실패"), "완료된 문구 / 최초 실패의 증거 진단 누락");
+            Require(result.Evidence.Count == 9 && result.Evidence.All(e => e.Error == "합성 증거 캡처 실패"), "사전 확인 / 완료된 문구 / 최초 실패의 증거 진단 누락");
 
             // Room text alone must never authorize rebinding to a different PID/root/composer tuple.
             foreach (string changedPart in new[] { "process", "window", "composer" })

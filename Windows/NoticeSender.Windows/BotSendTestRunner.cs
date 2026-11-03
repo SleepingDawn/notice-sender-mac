@@ -16,6 +16,7 @@ internal sealed class BotSendTestReport
 {
     public string Mode => "bot-send-test";
     public string Room { get; init; } = "";
+    public string? OnlyStep { get; init; }
     public string TestStamp { get; } = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N")[..8];
     public DateTimeOffset StartedAt { get; } = DateTimeOffset.Now;
     public DateTimeOffset? FinishedAt { get; set; }
@@ -24,7 +25,8 @@ internal sealed class BotSendTestReport
     public string? Failure { get; set; }
     public int RequestedCount => Steps.Count;
     public int SuccessCount => Steps.Count(s => s.Status == "passed");
-    public bool Success => Completed && !Cancelled && Failure == null && Preparation.Status == "verified" && RequestedCount == 7 && SuccessCount == RequestedCount;
+    public bool Success => Completed && !Cancelled && Failure == null && Preparation.Status == "verified" && RequestedCount == (OnlyStep == null ? 7 : 1) && SuccessCount == RequestedCount;
+    public bool FullSuitePassed => OnlyStep == null && Success;
     public int ExitCode => Cancelled ? 2 : Success ? 0 : 1;
     public string Note => "합성 데이터만 사용합니다. 전송 요청 / 앱 내 완료 확인은 서버 수신 확인이 아닙니다. 확인 필요 항목은 자동 재전송하지 않습니다.";
     public string? ArtifactDirectory { get; set; }
@@ -64,18 +66,19 @@ internal sealed class BotSendTestStep
 }
 
 internal sealed record BotSendTestTrace(DateTimeOffset At, string Step, string Operation, string Phase,
-    string? SyntheticText = null, IReadOnlyList<string>? SyntheticFiles = null, string? Error = null);
+    string? SyntheticText = null, IReadOnlyList<string>? SyntheticFiles = null, string? Error = null, string? DiagnosticException = null);
 
 /// <summary>Only a fresh in-memory database and generated synthetic payloads enter this isolated test suite.</summary>
 internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient opener, IBotEvidenceCapture? evidenceCapture = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
 
-    internal async Task<BotSendTestReport> RunAsync(string room, bool acknowledged, string reportPath, Action<BotSendTestReport>? progress, CancellationToken cancellationToken)
+    internal async Task<BotSendTestReport> RunAsync(string room, bool acknowledged, string reportPath, Action<BotSendTestReport>? progress, CancellationToken cancellationToken, string? onlyStep = null)
     {
         BotSendTestOptions.ValidateDestination(room, acknowledged);
+        BotSendTestOptions.ValidateStep(onlyStep);
         var database = new AppDatabase();
-        var report = new BotSendTestReport { Room = room, Logs = database.Logs, EvidenceCaptureEnabled = evidenceCapture != null };
+        var report = new BotSendTestReport { Room = room, OnlyStep = onlyStep, Logs = database.Logs, EvidenceCaptureEnabled = evidenceCapture != null };
         foreach (var (id, title) in new[] { ("A", "개별 + 공통 메시지 5개"), ("B", "메시지 + 단일 TXT"), ("C", "메시지 + TXT / CSV"),
             ("D", "첨부 전용 단일 TXT"), ("E-PDF", "메시지 + PDF 단독"), ("E-PNG", "메시지 + PNG 단독 / 이미지 미리보기"), ("F", "첫 메시지 후 제어 중단 / 재시도 차단") })
             report.Steps.Add(new() { Id = id, Title = title });
@@ -94,6 +97,7 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
         {
             cancellationToken.ThrowIfCancellationRequested();
             PrepareSyntheticPayloads(report);
+            if (onlyStep != null) report.Steps.RemoveAll(s => s.Id != onlyStep);
             Save();
             report.Preparation.Status = "opening";
             Save();
@@ -104,6 +108,7 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
             report.Preparation.WindowHandle = strict.WindowHandle.ToInt64();
             report.Preparation.ComposerHandle = strict.ComposerHandle.ToInt64();
             report.Preparation.Status = "verified";
+            trace.CapturePreparationEvidence();
             Save();
             var coordinator = new SendCoordinator(trace);
             foreach (var step in report.Steps)
@@ -238,6 +243,7 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
         internal string Step { get; set; } = "prepare";
         internal int TransportCallCount { get; private set; }
         internal int TextReturnCount { get; private set; }
+        internal void CapturePreparationEvidence() => CaptureEvidence("prepared-before-send");
         internal Action? AfterTextReturned { get; set; }
         private void CaptureEvidence(string stage)
         {
@@ -267,7 +273,7 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
             catch (Exception ex)
             {
                 if (!failureCaptured) { failureCaptured = true; CaptureEvidence(Step + "-" + operation + "-failed"); }
-                report.Trace.Add(new(DateTimeOffset.Now, Step, operation, "failed", Error: WindowsTrustFailure.Describe(ex))); save(); throw;
+                report.Trace.Add(new(DateTimeOffset.Now, Step, operation, "failed", Error: WindowsTrustFailure.Describe(ex), DiagnosticException: ex.ToString())); save(); throw;
             }
         }
         internal Task<RoomOpenDryRunResult> OpenAsync(string room, CancellationToken ct) => Call("open-room", async () =>

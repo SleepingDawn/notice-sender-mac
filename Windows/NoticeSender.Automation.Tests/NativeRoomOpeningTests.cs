@@ -42,9 +42,11 @@ internal static class NativeRoomOpeningTests
         catch (InvalidOperationException ex) when (ex.Message.Contains("정확한 채팅방 이름", StringComparison.Ordinal)) { return; }
         throw new Exception("Room-opening lease was not released.");
     }
-    public static Task OwnedUnnamedSearch()
+    public static Task OwnedUnnamedSearch() => OwnedUnnamedSearch(false);
+    public static Task OwnedContactSearch() => OwnedUnnamedSearch(true);
+    private static Task OwnedUnnamedSearch(bool contactView)
     {
-        using var windows = new OwnedSearchWindows();
+        using var windows = new OwnedSearchWindows(contactView);
         var target = WindowsKakaoClient.FindNativeRoomSearch(new HashSet<int> { Environment.ProcessId });
         WindowsKakaoClient.SearchNativeRoom(target, "정확한 가상 채팅방", CancellationToken.None);
         windows.Pump();
@@ -289,7 +291,7 @@ internal static class NativeRoomOpeningTests
         public nint Entered { get; private set; }
         public int EnterCount { get; private set; }
         private nint originalEditProc;
-        public OwnedSearchWindows()
+        public OwnedSearchWindows(bool contactView = false)
         {
             procedure = WindowProcedure;
             foreach (var name in new[] { "EVA_Window_Dblclk", "EVA_ChildWindow", "EVA_Window", "EVA_VH_ListControl_Dblclk" })
@@ -300,10 +302,10 @@ internal static class NativeRoomOpeningTests
             }
             main = Create("EVA_Window_Dblclk", "카카오톡", 0, 0);
             var online = Create("EVA_ChildWindow", "OnlineMainView_synthetic", main, 132);
-            view = Create("EVA_Window", "ChatRoomListView_synthetic", online, 1150);
+            view = Create("EVA_Window", contactView ? "ContactListView_synthetic" : "ChatRoomListView_synthetic", online, contactView ? 1149 : 1150);
             Search = Create("Edit", "", view, 100);
             originalEditProc = SetWindowLongPtr(Search, -4, Marshal.GetFunctionPointerForDelegate(procedure));
-            Results = Create("EVA_VH_ListControl_Dblclk", "SearchListCtrl_synthetic", view, 1003);
+            Results = Create("EVA_VH_ListControl_Dblclk", "SearchListCtrl_synthetic", view, contactView ? 101 : 1003);
             var friendView = Create("EVA_Window", "FriendListView_synthetic", online, 1149);
             OtherEdit = Create("Edit", "keep other search", friendView, 100);
             Room = Create("EVA_Window_Dblclk", "unrelated room", 0, 0);

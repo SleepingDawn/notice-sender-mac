@@ -27,7 +27,11 @@ internal static class Program
         bool smoke = args.Contains("--smoke-test");
         bool demo = smoke || args.Contains("--demo");
         if (args.Contains("--diagnose-kakao")) return RunKakaoDiagnosis(smoke);
-        if (smoke) File.Delete(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-error.txt"));
+        if (smoke)
+        {
+            File.Delete(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-error.txt"));
+            File.Delete(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-success.json"));
+        }
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         Ui.InstallStyles(app);
         try
@@ -44,7 +48,12 @@ internal static class Program
             {
                 window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(new Action(async () =>
                 {
-                    try { WindowsTrustFailureSmokeTests.Run(); window.VerifySmokeTest(); await RoomDryRunSmokeTests.RunAsync(); await BotSendTestSmokeTests.RunAsync(); app.Shutdown(0); }
+                    try
+                    {
+                        WindowsTrustFailureSmokeTests.Run(); window.VerifySmokeTest(); await RoomDryRunSmokeTests.RunAsync(); await BotSendTestSmokeTests.RunAsync();
+                        File.WriteAllText(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-success.json"), JsonSerializer.Serialize(new { completed = true, exitCode = 0, syntheticOnly = true, at = DateTimeOffset.Now }));
+                        app.Shutdown(0);
+                    }
                     catch (Exception ex) { File.WriteAllText(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-error.txt"), ex.ToString()); app.Shutdown(2); }
                 }));
             }
@@ -88,7 +97,7 @@ internal static class Program
     {
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         Ui.InstallStyles(app);
-        return app.Run(new BotSendTestWindow(options.Room, options.ReportPath, acknowledgeBotOnly: true, autoStart: true, exitAfterTest: options.ExitAfterTest, captureEvidence: options.CaptureEvidence));
+        return app.Run(new BotSendTestWindow(options.Room, options.ReportPath, acknowledgeBotOnly: true, autoStart: true, exitAfterTest: options.ExitAfterTest, captureEvidence: options.CaptureEvidence, replaceReviewedBotCue: options.ReplaceReviewedBotCue, onlyStep: options.OnlyStep, confirmNativeBotFiles: options.ConfirmNativeBotFiles));
     }
 
     internal static void WriteBotStartupFailureReport(string[] args, Exception exception)

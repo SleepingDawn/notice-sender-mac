@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using NoticeSender.Automation;
 
 namespace NoticeSender.Windows;
@@ -27,6 +28,17 @@ internal sealed class BotWindowEvidence : IBotEvidenceCapture
 {
     private int sequence;
     public BotEvidenceCaptureResult Capture(ChatTarget target, string stage, string artifactDirectory)
+    {
+        try { return WithDeadline(() => CaptureCore(target, stage, artifactDirectory), TimeSpan.FromSeconds(8)); }
+        catch (Exception ex) { return new(DateTimeOffset.Now, stage, target.WindowHandle.ToInt64(), Array.Empty<BotEvidenceImage>(), "증거 캡처를 완료하지 못했습니다: " + ex.Message); }
+    }
+
+    // Native PrintWindow has no cancellation contract. A stalled read-only worker may finish later,
+    // but cannot keep the sender waiting or authorize a send after this deadline has elapsed.
+    internal static T WithDeadline<T>(Func<T> capture, TimeSpan timeout) =>
+        Task.Run(capture).WaitAsync(timeout).GetAwaiter().GetResult();
+
+    private BotEvidenceCaptureResult CaptureCore(ChatTarget target, string stage, string artifactDirectory)
     {
         DateTimeOffset at = DateTimeOffset.Now;
         var images = new List<BotEvidenceImage>();
