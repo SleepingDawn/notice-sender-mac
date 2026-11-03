@@ -10,7 +10,7 @@
 ## Global constraints
 
 - Preserve SAC, recipient restrictions and no-coordinate automation.
-- Never execute unsigned product/test binaries on this blocked PC.
+- Never retry the known-blocked automation binaries or change hosts/policies to evade their block. Independent non-automation Core tests may use their normal SDK command when not blocked.
 - No provider registration, identity submission, payment or licensing without the user's decision.
 
 ## Review focus
@@ -45,3 +45,4 @@
 - GitHub Windows CI for the owner-approved license/policy build `dafbd43fcf17c8193f5dc479a6cd48dcc618289c`: [run 41667318489](https://github.com/SleepingDawn/notice-sender-mac/actions/runs/41667318489), completed success with all steps successful.
 - The user explicitly approved both required provider consent checkboxes and final submission, and separately authorized the CAPTCHA verification if needed. The next observed page already displayed **Form submitted / Thank you, we'll be in touch soon**; no image-challenge solution was entered by the agent. Optional marketing consent remained unchecked.
 - Receipt screenshot and private metadata are in ignored `outputs/`. SignPath acceptance, signing credentials and signed binaries are not yet available. Actual bot-only delivery tests cannot resume until trusted signing succeeds.
+- Scope correction after the user's local-testing question: the prior blanket statement about all unsigned test assemblies was too broad. A read-only check found 122 known automation block events and no Core test block events; the independent Core project references Core only. Its normal existing SDK command ran locally, 23/23 passed. Signature-audit script tests also passed 8/8. No blocked automation assembly, alternative loader, trust setting or live Kakao send was used. Current Windows edition is Home; Windows Sandbox is absent and unsupported in that edition. Local VM testing is a separate possible environment requiring installation and guest licensing/login, not an already performed host integration test.
