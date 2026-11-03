@@ -41,6 +41,8 @@ Windows에는 Mac의 손쉬운 사용 승인과 동일한 공지발송용 권한
 
 Windows와 .NET 10 SDK가 필요합니다.
 
+현재 PC의 보호 설정을 유지하는 [신뢰 서명 준비 및 검증 절차](SIGNING.md)를 별도로 마련했습니다. 서명 서비스 신청과 실제 서명은 아직 완료하지 않았습니다.
+
 ```powershell
 ./scripts/build-windows.ps1
 ./scripts/build-windows.ps1 -Publish

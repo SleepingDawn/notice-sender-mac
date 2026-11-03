@@ -40,6 +40,7 @@ if ($Publish) {
     Invoke-DotNet publish $appProject --configuration Release --runtime win-x64 --self-contained true '-p:PublishSingleFile=false' --output $output
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\README.md') -Destination (Join-Path $output 'Windows-Guide.md') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\TESTING.md') -Destination (Join-Path $output 'TESTING.md') -Force
+    Copy-Item -LiteralPath (Join-Path $repository 'Windows\SIGNING.md') -Destination (Join-Path $output 'SIGNING.md') -Force
     if (!$SkipTests) {
         $publishedSmoke = Start-Process -FilePath (Join-Path $output 'NoticeSender.exe') -ArgumentList '--smoke-test' -PassThru -WindowStyle Hidden
         if (!$publishedSmoke.WaitForExit(30000)) { $publishedSmoke.Kill(); throw '자체 포함 배포본 검사 시간 초과' }

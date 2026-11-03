@@ -2,9 +2,9 @@ name: Windows build and tests
 on:
   push:
     branches: [main, 'codex/**']
-    paths: ['Windows/**', 'scripts/build-windows.ps1', '.github/workflows/windows.yml']
+    paths: ['Windows/**', 'scripts/build-windows.ps1', 'scripts/test-windows-signatures.ps1', 'scripts/tests/**', '.github/workflows/windows.yml']
   pull_request:
-    paths: ['Windows/**', 'scripts/build-windows.ps1', '.github/workflows/windows.yml']
+    paths: ['Windows/**', 'scripts/build-windows.ps1', 'scripts/test-windows-signatures.ps1', 'scripts/tests/**', '.github/workflows/windows.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,9 +16,15 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Test read-only signature audit
+        shell: pwsh
+        run: ./scripts/tests/windows-signatures.tests.ps1
       - name: Build, self-test, smoke-test and publish
         shell: pwsh
         run: ./scripts/build-windows.ps1 -Publish
+      - name: Inventory unsigned development release (does not approve execution)
+        shell: pwsh
+        run: ./scripts/test-windows-signatures.ps1 -ReportPath outputs/windows-signatures.json
       - uses: actions/upload-artifact@v4
         with:
           name: NoticeSender-Windows-x64
