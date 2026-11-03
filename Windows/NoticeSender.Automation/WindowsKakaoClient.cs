@@ -26,17 +26,27 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
             var search = FindNativeRoomSearch(KakaoProcessIds());
             CheckKakaoProcess(search.ProcessId);
             SearchNativeRoom(search, exactRoomName, cancellationToken);
-            WaitUntil(() => RoomWindows(exactRoomName).Length > 0, cancellationToken, "검색 결과에서 정확한 이름의 채팅방이 열리지 않았습니다. 메시지·파일을 전송하지 않았습니다.");
+            WaitForNativeRoom(search, exactRoomName, cancellationToken);
             rooms = RoomWindows(exactRoomName);
         }
         cancellationToken.ThrowIfCancellationRequested();
         if (rooms.Length != 1) throw new InvalidOperationException("채팅방 이름이 고유하지 않습니다.");
-        var room = rooms[0];
-        var composer = UniqueComposer(room);
-        var target = new ChatTarget(room.Current.ProcessId, room.Current.NativeWindowHandle, exactRoomName, composer.Current.NativeWindowHandle);
-        Validate(target);
+        var target = InspectOpenedRoom(rooms[0].Current.NativeWindowHandle, exactRoomName);
+        ValidateRoomRoot(target);
+        if (target.ComposerHandle != 0) Validate(target);
         return new RoomOpenDryRunResult(exactRoomName, wasAlreadyOpen, target);
     }, cancellationToken);
+
+    internal static ChatTarget InspectOpenedRoom(nint windowHandle, string exactRoomName)
+    {
+        var room = AutomationElement.FromHandle(windowHandle);
+        if (room.Current.NativeWindowHandle != windowHandle || room.Current.ProcessId != Native.Pid(windowHandle) || Native.Title(windowHandle) != exactRoomName)
+            throw new InvalidOperationException("열린 채팅방 창의 이름 또는 소유권이 변경되었습니다.");
+        var composers = ComposerCandidates(room);
+        if (composers.Length > 1) throw new InvalidOperationException($"고유한 쓰기 가능 채팅 입력란이 없습니다 (후보 {composers.Length}개).");
+        // Notification-only channels can be opened and identified, but may never be treated as send-capable.
+        return new ChatTarget(room.Current.ProcessId, windowHandle, exactRoomName, composers.Length == 0 ? 0 : composers[0].Current.NativeWindowHandle);
+    }
 
     internal static NativeRoomSearch FindNativeRoomSearch(IReadOnlySet<int> processIds)
     {
@@ -74,6 +84,38 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         ValidateNativeSearch(search);
         if (Native.Text(search.SearchEdit) != roomName) throw new InvalidOperationException("검색어 확인에 실패했습니다.");
         WaitUntil(() => { ValidateNativeSearch(search); return Native.IsWindowVisible(search.Results); }, token, "채팅방 검색 결과 목록이 활성화되지 않았습니다.");
+        ConfirmNativeRoomSearch(search, roomName, token);
+    }
+
+    internal static void WaitForNativeRoom(NativeRoomSearch search, string roomName, CancellationToken token)
+    {
+        // List visibility does not mean that a changed query has finished updating. Only the exact opened native title establishes success.
+        var elapsed = Stopwatch.StartNew();
+        var nextConfirmation = TimeSpan.FromMilliseconds(750);
+        int remainingConfirmations = 2;
+        var processIds = new HashSet<int> { search.ProcessId };
+        while (elapsed.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            token.ThrowIfCancellationRequested();
+            int matches = DiscoverProcessWindows(processIds).Count(w => Native.Title(w) == roomName && Native.ClassName(w) == "EVA_Window_Dblclk");
+            if (matches > 1) throw new InvalidOperationException("동일한 이름의 채팅방이 여러 개 열려 있습니다.");
+            if (matches == 1) return;
+            ValidateNativeSearch(search);
+            if (Native.Text(search.SearchEdit) != roomName) throw new InvalidOperationException("검색어가 변경되어 채팅방 열기를 중단했습니다.");
+            if (remainingConfirmations > 0 && elapsed.Elapsed >= nextConfirmation)
+            {
+                // Retry result confirmation only; never repeat message or file delivery. Every attempt revalidates the same owned query/list.
+                ConfirmNativeRoomSearch(search, roomName, token);
+                remainingConfirmations--;
+                nextConfirmation = elapsed.Elapsed + TimeSpan.FromMilliseconds(750);
+            }
+            Thread.Sleep(50);
+        }
+        throw new InvalidOperationException("검색 결과에서 정확한 이름의 채팅방이 열리지 않았습니다. 메시지·파일을 전송하지 않았습니다.");
+    }
+
+    private static void ConfirmNativeRoomSearch(NativeRoomSearch search, string roomName, CancellationToken token)
+    {
         token.ThrowIfCancellationRequested();
         ValidateNativeSearch(search);
         if (Native.Text(search.SearchEdit) != roomName) throw new InvalidOperationException("검색어가 변경되어 채팅방을 열지 않았습니다.");
@@ -83,11 +125,85 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         Native.PostSearchEnter(search.Results);
     }
     internal static nint[] DiscoverProcessWindows(IReadOnlySet<int> processIds) => Native.TopLevelWindows().Where(w => processIds.Contains(Native.Pid(w))).ToArray();
-    internal static void RequireEmptyAfterFocus(Action focus, Func<string> read)
+    internal static void RequireFocusedEmptyComposer(Action requestFocus, Func<bool> verifiedFocus, Func<string> read, CancellationToken token)
     {
-        // Let the application remove its own cue on focus. Never erase or special-case arbitrary text.
-        focus();
-        if (read().Length != 0) throw new InvalidOperationException("채팅 입력란에 기존 내용이 있습니다. 내용을 확인해 주세요.");
+        token.ThrowIfCancellationRequested();
+        requestFocus();
+        WaitUntil(verifiedFocus, token, "채팅 입력란 포커스를 확인할 수 없습니다. 창을 활성화한 후 다시 시도해 주세요.");
+        var elapsed = Stopwatch.StartNew();
+        do
+        {
+            token.ThrowIfCancellationRequested();
+            if (!verifiedFocus()) throw new InvalidOperationException("채팅 입력란 포커스가 변경되어 전송하지 않았습니다.");
+            if (read().Length == 0) return;
+            // Focus may clear Kakao's own cue asynchronously. Wait for the actual empty state; never erase or exempt a string.
+            Thread.Sleep(50);
+        } while (elapsed.Elapsed < TimeSpan.FromSeconds(1));
+        throw new InvalidOperationException("채팅 입력란에 기존 내용이 있습니다. 내용을 확인해 주세요.");
+    }
+
+    internal static void WithExpectedComposerText(Action finalChecks, Func<string> read, string expected, Action mutation, CancellationToken token, string? changedMessage = null)
+    {
+        token.ThrowIfCancellationRequested();
+        finalChecks();
+        token.ThrowIfCancellationRequested();
+        // Keep this direct native read adjacent to the already-resolved write/invoke. Do not perform UIA lookups after it.
+        if (Normalize(read()) != Normalize(expected))
+            throw new InvalidOperationException(changedMessage ?? (expected.Length == 0 ? "채팅 입력란에 기존 내용이 있습니다. 내용을 확인해 주세요." : "전송 직전에 입력 내용이 변경되었습니다."));
+        token.ThrowIfCancellationRequested();
+        mutation();
+    }
+
+    private static void PrepareComposerForSend(ChatTarget target, CancellationToken token)
+    {
+        string before = ComposerFocusEvidence(target);
+        try
+        {
+            RequireFocusedEmptyComposer(() =>
+            {
+                Validate(target); token.ThrowIfCancellationRequested();
+                if (OwnedDialogs(target).Length != 0) throw new InvalidOperationException("채팅방에 기존 대화상자가 열려 있습니다.");
+                if (Native.IsIconic(target.WindowHandle) && !Native.ShowWindowAsync(target.WindowHandle, 9))
+                    throw new InvalidOperationException("최소화된 채팅방 창을 복원할 수 없습니다.");
+                WaitUntil(() => { Validate(target); return Native.IsWindowVisible(target.WindowHandle) && Native.IsWindowEnabled(target.WindowHandle) && !Native.IsIconic(target.WindowHandle); }, token,
+                    "채팅방 창이 표시·활성화되어 있지 않습니다.");
+                Validate(target); token.ThrowIfCancellationRequested();
+                Native.SetForegroundWindow(target.WindowHandle);
+                WaitUntil(() => { Validate(target); return Native.GetForegroundWindow() == target.WindowHandle; }, token,
+                    "채팅방 창을 전면으로 가져올 수 없습니다. 창을 활성화한 후 다시 시도해 주세요.");
+                token.ThrowIfCancellationRequested();
+                UniqueComposer(Validate(target)).SetFocus();
+            }, () => HasVerifiedComposerFocus(target), () => ReadComposer(UniqueComposer(Validate(target))), token);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(ex.Message + Environment.NewLine + "포커스 진단 (내용 제외): 이전 [" + before + "]; 현재 [" + ComposerFocusEvidence(target) + "]", ex);
+        }
+    }
+
+    private static bool HasVerifiedComposerFocus(ChatTarget target)
+    {
+        var composer = UniqueComposer(Validate(target));
+        return Native.HasComposerFocus(target.WindowHandle, target.ComposerHandle) && composer.Current.HasKeyboardFocus && !composer.Current.IsOffscreen;
+    }
+
+    private static void RequireComposerFocus(ChatTarget target)
+    {
+        if (!HasVerifiedComposerFocus(target)) throw new InvalidOperationException("채팅 입력란 포커스가 변경되어 전송하지 않았습니다. " + ComposerFocusEvidence(target));
+    }
+
+    private static string ComposerFocusEvidence(ChatTarget target)
+    {
+        try
+        {
+            string root = $"room HWND {target.WindowHandle}, foreground HWND {Native.GetForegroundWindow()}, visible {Native.IsWindowVisible(target.WindowHandle)}, enabled {Native.IsWindowEnabled(target.WindowHandle)}, iconic {Native.IsIconic(target.WindowHandle)}";
+            if (!Native.IsWindow(target.ComposerHandle) || Native.Pid(target.WindowHandle) != target.ProcessId || Native.Pid(target.ComposerHandle) != target.ProcessId || !Native.IsChild(target.WindowHandle, target.ComposerHandle))
+                return root + ", composer ownership unverified";
+            var composer = AutomationElement.FromHandle(target.ComposerHandle).Current;
+            return root + $", {Native.FocusState(target.ComposerHandle)}, UIA hasKeyboardFocus {composer.HasKeyboardFocus}, keyboardFocusable {composer.IsKeyboardFocusable}, offscreen {composer.IsOffscreen}, WM_GETTEXT length {Native.Text(target.ComposerHandle).Length}, {Native.EditState(target.ComposerHandle)}";
+        }
+        catch (Exception ex) { return "Focus diagnostic unavailable: " + ex.GetType().Name; }
     }
     public Task<ChatTarget> ResolveAsync(string exactRoomName, CancellationToken cancellationToken) => OnSta(() =>
     {
@@ -99,21 +215,30 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         {
             // Only search edits and exact invokable results are used; the message composer is never searched into.
             var searches = KakaoWindows().SelectMany(w => Elements(w, ControlType.Edit)
-                .Where(e => IsSearchName(e.Current.Name) && Writable(e))).ToArray();
+                .Where(e => IsSearchName(e.Current.Name) && Writable(e)).Select(e => (Root: w, Element: e))).ToArray();
             if (searches.Length != 1) throw new InvalidOperationException("채팅방을 먼저 열어 주세요. 고유한 접근성 검색 입력란을 찾을 수 없습니다.");
-            var search = searches[0];
-            CheckKakaoProcess(search.Current.ProcessId);
+            var search = searches[0].Element;
+            var searchRoot = searches[0].Root;
+            int searchPid = searchRoot.Current.ProcessId;
+            CheckKakaoProcess(searchPid);
+            var searchValue = (ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern);
+            RequireOwnedElement(search, searchRoot.Current.NativeWindowHandle, searchPid);
             cancellationToken.ThrowIfCancellationRequested();
-            ((ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern)).SetValue(exactRoomName);
+            searchValue.SetValue(exactRoomName);
             if (ReadValue(search) != exactRoomName) throw new InvalidOperationException("검색어 확인에 실패했습니다.");
             WaitUntil(() => KakaoWindows().SelectMany(w => Elements(w, ControlType.ListItem))
                 .Any(e => e.Current.Name == exactRoomName), cancellationToken, "정확한 이름의 검색 결과가 없습니다.");
-            var results = KakaoWindows().SelectMany(w => Elements(w, ControlType.ListItem))
-                .Where(e => e.Current.Name == exactRoomName).ToArray();
+            var results = KakaoWindows().SelectMany(w => Elements(w, ControlType.ListItem)
+                .Where(e => e.Current.Name == exactRoomName).Select(e => (Root: w, Element: e))).ToArray();
             if (results.Length != 1) throw new InvalidOperationException("정확히 일치하는 검색 결과가 여러 개입니다.");
-            CheckKakaoProcess(results[0].Current.ProcessId);
+            var result = results[0].Element;
+            var resultRoot = results[0].Root;
+            int resultPid = resultRoot.Current.ProcessId;
+            CheckKakaoProcess(resultPid);
+            var openResult = OwnedInvoker(result, resultRoot.Current.NativeWindowHandle, resultPid);
+            RequireOwnedElement(result, resultRoot.Current.NativeWindowHandle, resultPid);
             cancellationToken.ThrowIfCancellationRequested();
-            Invoke(results[0]);
+            openResult();
             WaitUntil(() => RoomWindows(exactRoomName).Length > 0, cancellationToken, "검색 결과에서 채팅방이 열리지 않았습니다.");
             rooms = RoomWindows(exactRoomName);
         }
@@ -131,32 +256,29 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         var room = Validate(target);
         var composer = UniqueComposer(room);
         cancellationToken.ThrowIfCancellationRequested();
-        RequireEmptyAfterFocus(() => { Validate(target); cancellationToken.ThrowIfCancellationRequested(); composer.SetFocus(); },
-            () => ReadComposer(UniqueComposer(Validate(target))));
-        cancellationToken.ThrowIfCancellationRequested();
-        Validate(target);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (composer.TryGetCurrentPattern(ValuePattern.Pattern, out var value) && !((ValuePattern)value).Current.IsReadOnly)
-            ((ValuePattern)value).SetValue(text);
-        else Native.SetText(target.ComposerHandle, text);
+        PrepareComposerForSend(target, cancellationToken);
+        Action write = composer.TryGetCurrentPattern(ValuePattern.Pattern, out var value) && !((ValuePattern)value).Current.IsReadOnly
+            ? () => ((ValuePattern)value).SetValue(text) : () => Native.SetText(target.ComposerHandle, text);
+        WithExpectedComposerText(() => RequireComposerFocus(target), () => Native.Text(target.ComposerHandle), "", write, cancellationToken);
         // Reading the targeted control back is mandatory before invoking send.
         if (Normalize(ReadComposer(UniqueComposer(Validate(target)))) != Normalize(text))
             throw new InvalidOperationException("입력 내용이 원문과 다릅니다. 전송하지 않았습니다.");
         cancellationToken.ThrowIfCancellationRequested();
         room = Validate(target);
-        if (Normalize(ReadComposer(UniqueComposer(room))) != Normalize(text))
-            throw new InvalidOperationException("전송 직전에 입력 내용이 변경되었습니다.");
-        cancellationToken.ThrowIfCancellationRequested();
         var sendButtons = Elements(room, ControlType.Button).Where(e => e.Current.IsEnabled && e.Current.Name is "전송" or "보내기" or "Send").ToArray();
         if (sendButtons.Length > 1) throw new InvalidOperationException("전송 버튼이 고유하지 않습니다.");
-        if (sendButtons.Length == 1) Invoke(sendButtons[0]);
-        else
+        Action confirm = sendButtons.Length == 1 ? OwnedInvoker(sendButtons[0], target.WindowHandle, target.ProcessId) : () =>
         {
             Native.Key(target.ComposerHandle, 0x100, 0x0D);
             // Keyup is scoped to the same validated HWND, never the focused window.
             Validate(target);
             Native.Key(target.ComposerHandle, 0x101, 0x0D);
-        }
+        };
+        WithExpectedComposerText(() =>
+        {
+            RequireComposerFocus(target);
+            if (sendButtons.Length == 1) RequireOwnedElement(sendButtons[0], target.WindowHandle, target.ProcessId);
+        }, () => Native.Text(target.ComposerHandle), text, confirm, cancellationToken);
         WaitUntil(() => ReadComposer(UniqueComposer(Validate(target))).Length == 0, cancellationToken,
             "메시지 전송 후 입력란이 비워지지 않았습니다. 중복 전송하지 말고 채팅방을 확인해 주세요.");
         return true;
@@ -172,8 +294,8 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
             throw new InvalidOperationException("동일한 파일 이름은 전송 완료를 구별할 수 없습니다.");
         var room = Validate(target);
         cancellationToken.ThrowIfCancellationRequested();
-        RequireEmptyAfterFocus(() => { Validate(target); cancellationToken.ThrowIfCancellationRequested(); UniqueComposer(room).SetFocus(); },
-            () => ReadComposer(UniqueComposer(Validate(target))));
+        PrepareComposerForSend(target, cancellationToken);
+        var ownedBaseline = OwnedWindowHandles(target.WindowHandle, target.ProcessId).ToHashSet();
         var before = FileEvidence(room, files);
         var controls = Elements(room, ControlType.Button).Where(e => e.Current.IsEnabled &&
             e.Current.Name is "파일 보내기" or "파일 첨부" or "파일" or "Send file" or "Attach file").ToArray();
@@ -188,26 +310,46 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
             if (drops.Length != 1) throw new NotSupportedException("접근성 파일 버튼 또는 고유한 등록 파일 드롭 대상이 없습니다. 파일을 보내지 않았습니다.");
             if (Native.Pid(drops[0]) != target.ProcessId || (drops[0] != target.WindowHandle && !Native.IsChild(target.WindowHandle, drops[0])))
                 throw new InvalidOperationException("파일 드롭 대상의 소유권이 다릅니다.");
-            cancellationToken.ThrowIfCancellationRequested();
-            Validate(target); Native.DropFiles(drops[0], files);
+            WithExpectedComposerText(() => RequireComposerFocus(target), () => Native.Text(target.ComposerHandle), "", () => Native.DropFiles(drops[0], files), cancellationToken);
         }
         else
         {
-        Invoke(controls[0]);
-        WaitUntil(() => OwnedDialogs(target).Length == 1, cancellationToken, "파일 선택 대화상자를 확인할 수 없습니다.");
-        var dialog = OwnedDialogs(target).Single();
+        var attach = OwnedInvoker(controls[0], target.WindowHandle, target.ProcessId);
+        WithExpectedComposerText(() =>
+        {
+            RequireComposerFocus(target);
+            RequireOwnedElement(controls[0], target.WindowHandle, target.ProcessId);
+        }, () => Native.Text(target.ComposerHandle), "", attach, cancellationToken);
+        WaitUntil(() =>
+        {
+            var current = AttachmentDialogs(target, ownedBaseline);
+            if (current.Length > 1) throw new InvalidOperationException("새 첨부 대화상자가 여러 개여서 중단했습니다.");
+            return current.Length == 1;
+        }, cancellationToken, "파일 선택 대화상자를 확인할 수 없습니다.");
+        var dialog = AttachmentDialogs(target, ownedBaseline).Single();
         var edits = Elements(dialog, ControlType.Edit).Where(e =>
             e.Current.AutomationId is "1148" or "FileNameControlHost" || e.Current.Name is "파일 이름:" or "File name:").ToArray();
         if (edits.Length != 1 || !Writable(edits[0])) throw new NotSupportedException("파일 이름 입력란이 고유한 접근성 컨트롤이 아닙니다.");
         var filenames = string.Join(" ", files.Select(p => "\"" + p + "\""));
+        var filenameValue = (ValuePattern)edits[0].GetCurrentPattern(ValuePattern.Pattern);
         cancellationToken.ThrowIfCancellationRequested();
         Validate(target); ValidateOwned(target, dialog);
-        ((ValuePattern)edits[0].GetCurrentPattern(ValuePattern.Pattern)).SetValue(filenames);
+        RequireOwnedElement(edits[0], dialog.Current.NativeWindowHandle, target.ProcessId);
+        cancellationToken.ThrowIfCancellationRequested();
+        filenameValue.SetValue(filenames);
         if (ReadValue(edits[0]) != filenames) throw new InvalidOperationException("선택한 첨부 경로가 원문과 다릅니다.");
         var open = Elements(dialog, ControlType.Button).Where(e => e.Current.AutomationId == "1" && e.Current.IsEnabled).ToArray();
         if (open.Length != 1) throw new InvalidOperationException("파일 열기 버튼을 확인할 수 없습니다.");
-        cancellationToken.ThrowIfCancellationRequested();
-        Validate(target); ValidateOwned(target, dialog); Invoke(open[0]);
+        var chooseFiles = OwnedInvoker(open[0], dialog.Current.NativeWindowHandle, target.ProcessId);
+        nint filenameWindow = edits[0].Current.NativeWindowHandle;
+        WithExpectedComposerText(() =>
+        {
+            Validate(target); ValidateOwned(target, dialog);
+            RequireOwnedElement(edits[0], dialog.Current.NativeWindowHandle, target.ProcessId);
+            if (edits[0].Current.NativeWindowHandle != filenameWindow) throw new InvalidOperationException("파일 이름 입력란 식별자가 변경되었습니다.");
+            RequireOwnedElement(open[0], dialog.Current.NativeWindowHandle, target.ProcessId);
+        }, () => Native.Text(filenameWindow), filenames, chooseFiles, cancellationToken,
+            "선택한 첨부 경로가 변경되어 파일을 열지 않았습니다.");
         }
         // Some versions upload directly; others expose an owned confirmation dialog. Never press an unnamed default button.
         var end = DateTime.UtcNow.AddSeconds(20);
@@ -216,7 +358,7 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         {
             cancellationToken.ThrowIfCancellationRequested();
             room = Validate(target);
-            var dialogs = OwnedDialogs(target);
+            var dialogs = AttachmentDialogs(target, ownedBaseline);
             if (dialogs.Length > 1) throw new InvalidOperationException("첨부 대화상자가 여러 개여서 중단했습니다.");
             if (dialogs.Length == 1)
             {
@@ -225,8 +367,11 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
                 var evidence = AllNames(confirmation);
                 if (!confirmed && buttons.Length == 1 && files.All(f => evidence.Contains(Path.GetFileName(f), StringComparison.Ordinal)))
                 {
+                    var confirmFiles = OwnedInvoker(buttons[0], confirmation.Current.NativeWindowHandle, target.ProcessId);
                     cancellationToken.ThrowIfCancellationRequested();
-                    Validate(target); ValidateOwned(target, confirmation); Invoke(buttons[0]); confirmed = true;
+                    Validate(target); ValidateOwned(target, confirmation);
+                    RequireOwnedElement(buttons[0], confirmation.Current.NativeWindowHandle, target.ProcessId);
+                    cancellationToken.ThrowIfCancellationRequested(); confirmFiles(); confirmed = true;
                 }
             }
             else if (FileEvidence(room, files).Where((count, i) => count > before[i]).Count() == files.Length &&
@@ -235,7 +380,7 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
                 // Completion requires newly visible transcript evidence for every filename, plus no modal/progress UI.
                 Thread.Sleep(300);
                 Validate(target);
-                if (OwnedDialogs(target).Length == 0 && FileEvidence(room, files).Where((count, i) => count > before[i]).Count() == files.Length)
+                if (AttachmentDialogs(target, ownedBaseline).Length == 0 && FileEvidence(room, files).Where((count, i) => count > before[i]).Count() == files.Length)
                     return true;
             }
             Thread.Sleep(150);
@@ -256,7 +401,7 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         var pids = KakaoProcessIds();
         var allWindows = Native.TopLevelWindows();
         var windows = allWindows.Where(w => pids.Contains(Native.Pid(w))).ToArray();
-        var lines = new List<string> { $"Current PID {Environment.ProcessId}, session {Process.GetCurrentProcess().SessionId}; KakaoTalk PIDs [{string.Join(',', pids)}]; native total {allWindows.Length}, Kakao windows {windows.Length}. Read-only inspection; no text entry/file paste/Enter." };
+        var lines = new List<string> { $"Current PID {Environment.ProcessId}, session {Process.GetCurrentProcess().SessionId}; foreground HWND {Native.GetForegroundWindow()}; KakaoTalk PIDs [{string.Join(',', pids)}]; native total {allWindows.Length}, Kakao windows {windows.Length}. Read-only inspection; no text entry/file paste/Enter." };
         foreach (var pid in pids)
         {
             using var process = Process.GetProcessById(pid);
@@ -265,16 +410,21 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         foreach (var hwnd in windows)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            lines.Add($"HWND {hwnd}, PID {Native.Pid(hwnd)}, title [{Native.Title(hwnd)}], native class {Native.ClassName(hwnd)}, visible {Native.IsWindowVisible(hwnd)}, drop targets [{string.Join(',', Native.DropTargets(hwnd))}]");
+            lines.Add($"HWND {hwnd}, PID {Native.Pid(hwnd)}, owner {Native.Owner(hwnd)}, title [{Native.Title(hwnd)}], native class {Native.ClassName(hwnd)}, visible {Native.IsWindowVisible(hwnd)}, enabled {Native.IsWindowEnabled(hwnd)}, iconic {Native.IsIconic(hwnd)}, {Native.Styles(hwnd)}, drop targets [{string.Join(',', Native.DropTargets(hwnd))}]");
             foreach (var child in Native.Children(hwnd))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 lines.Add($"  native child HWND {child}, PID {Native.Pid(child)}, parent {Native.Parent(child)}, id {Native.ControlId(child)}, class {Native.ClassName(child)}, visible {Native.IsWindowVisible(child)}, enabled {Native.IsWindowEnabled(child)}");
+                if (Native.Pid(child) == Native.Pid(hwnd) && Native.ClassName(child).StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase))
+                    lines.Add($"    {Native.FocusState(child)}, WM_GETTEXT length {Native.Text(child).Length}, {Native.EditState(child)}");
             }
             try
             {
                 var window = AutomationElement.FromHandle(hwnd);
                 lines.Add($"  UIA role {window.Current.ControlType.ProgrammaticName}, HWND {window.Current.NativeWindowHandle}, name matches native {window.Current.Name == Native.Title(hwnd)}");
+                lines.Add(window.TryGetCurrentPattern(WindowPattern.Pattern, out var windowPattern)
+                    ? $"  UIA WindowPattern modal {((WindowPattern)windowPattern).Current.IsModal}, interaction {((WindowPattern)windowPattern).Current.WindowInteractionState}"
+                    : "  UIA WindowPattern unavailable");
                 foreach (var element in window.FindAll(TreeScope.Descendants, Condition.TrueCondition).Cast<AutomationElement>())
                 {
                     var current = element.Current;
@@ -283,7 +433,7 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
                     if (current.ControlType != ControlType.Edit && current.ControlType != ControlType.Document && current.AutomationId != "202") continue;
                     int? length = current.NativeWindowHandle != 0 && current.ProcessId == Native.Pid(hwnd) && Native.IsChild(hwnd, current.NativeWindowHandle)
                         ? Native.Text(current.NativeWindowHandle).Length : null;
-                    lines.Add($"  control HWND {current.NativeWindowHandle}, role {current.ControlType.ProgrammaticName}, id {current.AutomationId}, class {current.ClassName}, enabled {current.IsEnabled}, writableValue {Writable(element)}, writableRichEdit {Native.WritableRichEdit(current.NativeWindowHandle)}, WM_GETTEXT length {length}");
+                    lines.Add($"  control HWND {current.NativeWindowHandle}, role {current.ControlType.ProgrammaticName}, id {current.AutomationId}, class {current.ClassName}, enabled {current.IsEnabled}, hasKeyboardFocus {current.HasKeyboardFocus}, keyboardFocusable {current.IsKeyboardFocusable}, offscreen {current.IsOffscreen}, writableValue {Writable(element)}, writableRichEdit {Native.WritableRichEdit(current.NativeWindowHandle)}, WM_GETTEXT length {length}");
                     if (current.NativeWindowHandle != 0 && current.ClassName.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase))
                         lines.Add($"    {Native.EditState(current.NativeWindowHandle)}");
                 }
@@ -296,16 +446,21 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
 
     private static AutomationElement Validate(ChatTarget target)
     {
+        var room = ValidateRoomRoot(target);
+        if (!Native.IsWindow(target.ComposerHandle) || Native.Pid(target.ComposerHandle) != target.ProcessId || !Native.IsChild(target.WindowHandle, target.ComposerHandle))
+            throw new InvalidOperationException("채팅 입력란이 사라졌거나 다른 창에 속합니다.");
+        var composer = UniqueComposer(room);
+        if (composer.Current.NativeWindowHandle != target.ComposerHandle) throw new InvalidOperationException("채팅 입력란 식별자가 변경되었습니다.");
+        return room;
+    }
+
+    private static AutomationElement ValidateRoomRoot(ChatTarget target)
+    {
         CheckKakaoProcess(target.ProcessId);
         if (!Native.IsWindow(target.WindowHandle) || Native.Pid(target.WindowHandle) != target.ProcessId || Native.Title(target.WindowHandle) != target.RoomName)
             throw new InvalidOperationException("채팅방 창의 이름 또는 소유 프로세스가 변경되었습니다.");
         if (RoomWindows(target.RoomName).Length != 1) throw new InvalidOperationException("채팅방 이름이 고유하지 않습니다.");
-        if (!Native.IsWindow(target.ComposerHandle) || Native.Pid(target.ComposerHandle) != target.ProcessId || !Native.IsChild(target.WindowHandle, target.ComposerHandle))
-            throw new InvalidOperationException("채팅 입력란이 사라졌거나 다른 창에 속합니다.");
-        var room = AutomationElement.FromHandle(target.WindowHandle);
-        var composer = UniqueComposer(room);
-        if (composer.Current.NativeWindowHandle != target.ComposerHandle) throw new InvalidOperationException("채팅 입력란 식별자가 변경되었습니다.");
-        return room;
+        return AutomationElement.FromHandle(target.WindowHandle);
     }
 
     private static HashSet<int> KakaoProcessIds()
@@ -340,17 +495,48 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
     private static string ReadValue(AutomationElement element) => ((ValuePattern)element.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
     private static string ReadComposer(AutomationElement composer) => Native.Text(composer.Current.NativeWindowHandle);
     private static string Normalize(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n');
-    private static void Invoke(AutomationElement element)
+    internal static void RequireNativeControlScope(nint expectedRoot, int expectedPid, nint control, int uiaPid)
+    {
+        if (expectedRoot == 0 || control == 0 || uiaPid != expectedPid || !Native.IsWindow(expectedRoot) || !Native.IsWindow(control) ||
+            Native.Pid(expectedRoot) != expectedPid || Native.Pid(control) != expectedPid || !Native.IsChild(expectedRoot, control))
+            throw new InvalidOperationException("접근성 컨트롤의 네이티브 창·프로세스·하위 소유권을 확인할 수 없습니다.");
+    }
+
+    private static void RequireOwnedElement(AutomationElement element, nint expectedRoot, int expectedPid)
+    {
+        var current = element.Current;
+        RequireNativeControlScope(expectedRoot, expectedPid, current.NativeWindowHandle, current.ProcessId);
+        if (!current.IsEnabled || !Native.IsWindowEnabled(current.NativeWindowHandle) || !Native.IsWindowVisible(current.NativeWindowHandle))
+            throw new InvalidOperationException("접근성 컨트롤이 표시·활성화되어 있지 않습니다.");
+    }
+
+    private static Action OwnedInvoker(AutomationElement element, nint expectedRoot, int expectedPid)
     {
         if (!element.Current.IsEnabled || !element.TryGetCurrentPattern(InvokePattern.Pattern, out var pattern))
             throw new NotSupportedException("접근성 Invoke 기능을 제공하지 않는 컨트롤입니다.");
-        ((InvokePattern)pattern).Invoke();
+        // Resolve the semantic action first, then verify its concrete native scope before any caller's final text guard.
+        RequireOwnedElement(element, expectedRoot, expectedPid);
+        return ((InvokePattern)pattern).Invoke;
     }
-    private static AutomationElement[] OwnedDialogs(ChatTarget target) => KakaoWindows().Where(e =>
-        e.Current.ProcessId == target.ProcessId && Native.OwnerChainIncludes(e.Current.NativeWindowHandle, target.WindowHandle)).ToArray();
+    internal static nint[] OwnedWindowHandles(nint owner, int processId) => DiscoverProcessWindows(new HashSet<int> { processId })
+        .Where(w => Native.IsWindowVisible(w) && Native.OwnerChainIncludes(w, owner)).ToArray();
+
+    internal static nint[] BlockingOwnedWindowHandles(nint owner, int processId) => OwnedWindowHandles(owner, processId).Where(w =>
+        !Native.IsWindowEnabled(owner) || Native.ClassName(w) == "#32770" ||
+        (AutomationElement.FromHandle(w).TryGetCurrentPattern(WindowPattern.Pattern, out var modal) && ((WindowPattern)modal).Current.IsModal)).ToArray();
+
+    internal static nint[] AttachmentWindowHandles(nint owner, int processId, IReadOnlySet<nint> visibleBaseline) => OwnedWindowHandles(owner, processId)
+        .Where(w => !visibleBaseline.Contains(w)).ToArray();
+
+    private static AutomationElement[] OwnedDialogs(ChatTarget target) => BlockingOwnedWindowHandles(target.WindowHandle, target.ProcessId)
+        .Select(AutomationElement.FromHandle).ToArray();
+
+    private static AutomationElement[] AttachmentDialogs(ChatTarget target, IReadOnlySet<nint> baseline) => AttachmentWindowHandles(target.WindowHandle, target.ProcessId, baseline)
+        .Select(AutomationElement.FromHandle).ToArray();
     private static void ValidateOwned(ChatTarget target, AutomationElement dialog)
     {
-        if (dialog.Current.ProcessId != target.ProcessId || !Native.OwnerChainIncludes(dialog.Current.NativeWindowHandle, target.WindowHandle))
+        var hwnd = (nint)dialog.Current.NativeWindowHandle;
+        if (dialog.Current.ProcessId != target.ProcessId || !Native.IsWindow(hwnd) || Native.Pid(hwnd) != target.ProcessId || !Native.IsWindowVisible(hwnd) || !Native.OwnerChainIncludes(hwnd, target.WindowHandle))
             throw new InvalidOperationException("파일 대화상자의 소유권이 변경되었습니다.");
     }
     private static string AllNames(AutomationElement root) => string.Join("\n", root.FindAll(TreeScope.Descendants, Condition.TrueCondition)
@@ -431,6 +617,11 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindow(nint hWnd);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowVisible(nint hWnd);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowEnabled(nint hWnd);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsIconic(nint hWnd);
+        [DllImport("user32.dll")] public static extern nint GetForegroundWindow();
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool SetForegroundWindow(nint window);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool ShowWindowAsync(nint window, int show);
+        [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetGUIThreadInfo(uint threadId, ref GuiThreadInfo info);
         [DllImport("user32.dll", EntryPoint = "GetParent")] public static extern nint Parent(nint hWnd);
         [DllImport("user32.dll", EntryPoint = "GetDlgCtrlID")] public static extern int ControlId(nint hWnd);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsChild(nint parent, nint child);
@@ -449,8 +640,28 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         [DllImport("kernel32.dll")] private static extern nint GlobalFree(nint memory);
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern nint SendMessageTimeout(nint window, uint message, nuint wParam, nint lParam, uint flags, uint timeout, out nuint result);
         public static int Pid(nint window) { GetWindowThreadProcessId(window, out int id); return id; }
+        [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left; public int Top; public int Right; public int Bottom; }
+        [StructLayout(LayoutKind.Sequential)] private struct GuiThreadInfo { public int Size; public uint Flags; public nint Active; public nint Focus; public nint Capture; public nint MenuOwner; public nint MoveSize; public nint Caret; public NativeRect CaretRect; }
+        public static string FocusState(nint window)
+        {
+            uint thread = GetWindowThreadProcessId(window, out _);
+            var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };
+            return GetGUIThreadInfo(thread, ref info)
+                ? $"owner thread {thread}, active HWND {info.Active}, focus HWND {info.Focus}, caret HWND {info.Caret}, foreground HWND {GetForegroundWindow()}"
+                : $"owner thread {thread}, GetGUIThreadInfo failed Win32 {Marshal.GetLastWin32Error()}";
+        }
+        public static bool HasComposerFocus(nint room, nint composer)
+        {
+            if (!IsWindow(room) || !IsWindow(composer) || Pid(room) != Pid(composer) || !IsChild(room, composer) || GetForegroundWindow() != room ||
+                !IsWindowVisible(room) || !IsWindowEnabled(room) || IsIconic(room) || !IsWindowVisible(composer) || !IsWindowEnabled(composer)) return false;
+            uint thread = GetWindowThreadProcessId(composer, out _);
+            var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };
+            return GetGUIThreadInfo(thread, ref info) && info.Active == room && info.Focus == composer;
+        }
         public static string Title(nint window) { var b = new StringBuilder(4096); GetWindowText(window, b, b.Capacity); return b.ToString(); }
         public static string ClassName(nint window) { var b = new StringBuilder(256); GetClassName(window, b, b.Capacity); return b.ToString(); }
+        public static nint Owner(nint window) => GetWindow(window, 4);
+        public static string Styles(nint window) => $"style 0x{GetWindowLong(window, -16):X8}, exStyle 0x{GetWindowLong(window, -20):X8}";
         public static string EditState(nint window) => $"EM_GETMODIFY {Message(window, 0xB8, 0, 0) != 0}, EM_GETSEL packed {Message(window, 0xB0, 0, 0)}";
         public static nint[] TopLevelWindows()
         {

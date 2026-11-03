@@ -32,13 +32,14 @@ internal sealed class RoomDryRunStep
     public string DisplayStatus => Status switch
     {
         "opening" => "방 여는 중…",
-        "already-open" => "기존 창 · 확인 완료",
-        "newly-opened" => "새로 열린 창 · 확인 완료",
+        "already-open" => CanCompose == false ? "기존 방 열림 · 발송 입력란 없음" : "기존 창 · 확인 완료",
+        "newly-opened" => CanCompose == false ? "새 방 열림 · 발송 입력란 없음" : "새로 열린 창 · 확인 완료",
         "failed" => "실패 · 중단",
         "cancelled" => "중지됨",
         _ => "대기"
     };
     public bool? WasAlreadyOpen { get; set; }
+    public bool? CanCompose { get; set; }
     public int? ProcessId { get; set; }
     public long? WindowHandle { get; set; }
     public long? ComposerHandle { get; set; }
@@ -87,9 +88,10 @@ internal sealed class RoomDryRunRunner(IDryRunChatClient client)
                 step.Status = "opening";
                 Publish();
                 var result = await client.OpenRoomDryRunAsync(step.RoomName, cancellationToken);
-                if (result.RoomName != step.RoomName || result.Target.RoomName != step.RoomName || result.Target.ProcessId <= 0 || result.Target.WindowHandle == 0 || result.Target.ComposerHandle == 0)
-                    throw new InvalidOperationException("요청한 방의 창과 입력란을 검증하지 못했습니다.");
+                if (result.RoomName != step.RoomName || result.Target.RoomName != step.RoomName || result.Target.ProcessId <= 0 || result.Target.WindowHandle == 0)
+                    throw new InvalidOperationException("요청한 방의 창을 검증하지 못했습니다.");
                 step.WasAlreadyOpen = result.WasAlreadyOpen;
+                step.CanCompose = result.Target.ComposerHandle != 0;
                 step.ProcessId = result.Target.ProcessId;
                 step.WindowHandle = result.Target.WindowHandle.ToInt64();
                 step.ComposerHandle = result.Target.ComposerHandle.ToInt64();

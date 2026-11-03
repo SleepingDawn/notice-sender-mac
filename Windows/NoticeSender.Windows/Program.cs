@@ -11,13 +11,18 @@ namespace NoticeSender.Windows;
 
 internal static class Program
 {
-    internal static bool ModesAreCompatible(string[] args) => !args.Contains("--dry-run-rooms") ||
-        !args.Any(arg => arg is "--demo" or "--smoke-test" or "--diagnose-kakao");
+    internal static bool ModesAreCompatible(string[] args)
+    {
+        if (args.Contains("--bot-send-test"))
+            return !args.Any(arg => arg is "--demo" or "--smoke-test" or "--diagnose-kakao" or "--dry-run-rooms");
+        return !args.Contains("--dry-run-rooms") || !args.Any(arg => arg is "--demo" or "--smoke-test" or "--diagnose-kakao");
+    }
 
     [STAThread]
     public static int Main(string[] args)
     {
         if (!ModesAreCompatible(args)) return 1;
+        if (args.Contains("--bot-send-test")) return RunBotSendTest(args);
         if (args.Contains("--dry-run-rooms")) return RunRoomDryRun(args);
         bool smoke = args.Contains("--smoke-test");
         bool demo = smoke || args.Contains("--demo");
@@ -50,7 +55,7 @@ internal static class Program
             {
                 window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(new Action(async () =>
                 {
-                    try { window.VerifySmokeTest(); await RoomDryRunSmokeTests.RunAsync(); app.Shutdown(0); }
+                    try { window.VerifySmokeTest(); await RoomDryRunSmokeTests.RunAsync(); await BotSendTestSmokeTests.RunAsync(); app.Shutdown(0); }
                     catch (Exception ex) { File.WriteAllText(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-error.txt"), ex.ToString()); app.Shutdown(2); }
                 }));
             }
@@ -61,6 +66,19 @@ internal static class Program
             if (!smoke) MessageBox.Show("데이터를 열지 못했습니다. 기존 파일은 교체하지 않았습니다.\n\n" + ex.Message, "공지발송 시작 실패");
             return 1;
         }
+    }
+
+    private static int RunBotSendTest(string[] args)
+    {
+        try
+        {
+            var options = BotSendTestOptions.Parse(args);
+            var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+            Ui.InstallStyles(app);
+            // This mode never constructs the main window, database store, or real database mutex.
+            return app.Run(new BotSendTestWindow(options.Room, options.ReportPath, acknowledgeBotOnly: true, autoStart: true, exitAfterTest: options.ExitAfterTest, captureEvidence: options.CaptureEvidence));
+        }
+        catch (Exception) { return 1; } // Command-line test failures must not block on an error dialog.
     }
 
     private static int RunRoomDryRun(string[] args)

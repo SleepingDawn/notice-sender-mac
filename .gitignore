@@ -30,3 +30,4 @@ Windows/artifacts/
 Windows/.vs/
 .tools/
 **/.local/
+**/.review/

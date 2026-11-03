@@ -7,7 +7,7 @@
 - [x] Extend read-only diagnostics for main native child roles; verify runtime evidence.
 - [x] Add a failing native search ownership/opening regression using synthetic owned Windows controls, then implement the strict search fallback and verify it green.
 - [x] Add an isolated app-native named-room dry-run window/entry point (progress, cancellation, private report; no real database) and regression checks for no delivery.
-- [ ] Run the app's five-room dry run, documenting which rooms were newly opened vs already open. Do not count manual opening as app evidence.
+- [x] Run the app's five-room dry run, documenting which rooms were newly opened vs already open. Do not count manual opening as app evidence.
 - [x] Full tests and focused independent review, version/build 3.1.1/74 and self-contained ZIP. Preserve the existing feature branch for commit/push; no main merge.
 
 **Review risks:** wrong process/parent, non-chat search edits, query changed concurrently, search opening wrong/duplicate titles, cancellation after opening. Fail before delivery in every case. Existing manually opened rooms do not prove closed-room opening; use other initially closed rooms to demonstrate it and explicitly report existing ones.
@@ -20,3 +20,9 @@
 - Post-failure read-only product inspection confirmed search results active but Edit disabled. Targeting the active results list is the focused correction; not a broad hotkey fallback.
 - Physical Escape stopped Computer Use during observation. No additional Kakao input/live opening runs this turn. Native correction is checked with owned synthetic HWNDs; real 5-room rerun remains pending.
 - Native regression suite: 38/38, including real HWND command ownership, hidden/locked/inactive/conflicting views, query tampering and cross-process contention. WPF smoke includes dry-run order/failure/cancel/report, exact names, demo route and mutually exclusive CLI modes. Named room-opening mutex covers discovery through exact verification across processes.
+
+## Completed follow-up validation
+
+On the user's subsequent explicit continuation, the actual WPF app newly opened the first room, then the second in a settled-query probe. This exposed asynchronous stale search results; bounded result-list-only confirmations corrected it. A following app run opened the third and fourth rooms, with the fourth correctly identified as a read-only notification channel. Opening-only mode now records CanCompose=false while lesson preflight and actual delivery remain blocked for that channel.
+
+The final actual app run `outputs/top-five-app-dry-run-5.json` completed at 2026-11-03 23:27 KST with exit 0, all five roots verified, zero failures, four existing roots and the fifth newly opened by the app. Earlier app runs establish new-opening evidence for the other four. No manual room opening was used in this follow-up, and no message/file delivery was invoked. The initial incomplete evidence above is retained as history, not the current completion status.

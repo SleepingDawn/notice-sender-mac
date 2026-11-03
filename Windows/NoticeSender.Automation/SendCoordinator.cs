@@ -44,9 +44,14 @@ public sealed class SendCoordinator(IChatClient client)
                 persist(); progress(original);
                 try
                 {
-                    var target = dryRun && client is IDryRunChatClient opener
-                        ? (await opener.OpenRoomDryRunAsync(item.ChatRoomName, cancellationToken)).Target
-                        : await client.ResolveAsync(item.ChatRoomName, cancellationToken);
+                    ChatTarget target;
+                    if (dryRun && client is IDryRunChatClient opener)
+                    {
+                        var opened = await opener.OpenRoomDryRunAsync(item.ChatRoomName, cancellationToken);
+                        if (!opened.CanCompose) throw new InvalidOperationException("채팅방은 열렸으나 발송 입력란이 없습니다. 알림 전용 채널에는 발송할 수 없습니다.");
+                        target = opened.Target;
+                    }
+                    else target = await client.ResolveAsync(item.ChatRoomName, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!dryRun)
                     {

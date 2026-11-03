@@ -28,8 +28,6 @@ var tests = new (string, Func<Task>)[] {
     ("attachment-only batch sends files without empty text", AttachmentOnly),
     ("native discovery includes top-level controls without a Window UIA role", NativeEnumerationTests.CustomTopLevel),
     ("interrupted dry run never creates a protected delivery log", InterruptedDryRun),
-    ("composer focus precedes empty-draft check", ComposerFocus),
-    ("composer focus never clears an existing draft", ComposerDraft),
     ("native room opening queries the owned search and queues Enter only to its visible result list", NativeRoomOpeningTests.OwnedUnnamedSearch)
     ,("coordinator dry run uses the app opener without entering delivery", DryRunOpener)
     ,("coordinator actual delivery retains strict resolution", ActualStrictResolver)
@@ -43,6 +41,35 @@ var tests = new (string, Func<Task>)[] {
     ,("native room search can activate the owned hidden edit through its query notification", NativeRoomOpeningTests.HiddenSearch)
     ,("room opening is serialized across processes before any desktop operation", NativeRoomOpeningTests.CrossProcessLease)
     ,("native room search rejects a visible conflicting main view", NativeRoomOpeningTests.VisibleOtherView)
+    ,("delayed native search results are reconfirmed until the exact room opens", NativeRoomOpeningTests.DelayedResults)
+    ,("native result confirmations stop at the bounded retry limit", NativeRoomOpeningTests.CappedConfirmations)
+    ,("native result readiness cancellation prevents another confirmation", NativeRoomOpeningTests.CancelDuringReadiness)
+    ,("native query changes while waiting prevent another confirmation", NativeRoomOpeningTests.QueryChangesDuringReadiness)
+    ,("native ownership changes while waiting prevent another confirmation", NativeRoomOpeningTests.OwnershipChangesDuringReadiness)
+    ,("opening-only inspection accepts an exact read-only room without send capability", NativeRoomOpeningTests.ReadOnlyOpeningCapability)
+    ,("opening-only inspection rejects multiple composer candidates", NativeRoomOpeningTests.AmbiguousOpeningCapability)
+    ,("lesson dry run rejects a room that opened without a send input", ReadOnlyLessonDryRun)
+    ,("composer preflight verifies focus before reading a draft", ComposerPreflightTests.VerifyBeforeRead)
+    ,("composer preflight rejects denied focus before any draft read", ComposerPreflightTests.DeniedFocus)
+    ,("composer preflight waits for the application to clear its own cue", ComposerPreflightTests.DelayedCueClear)
+    ,("composer preflight preserves arbitrary nonempty drafts", ComposerPreflightTests.PreserveDraft)
+    ,("composer preflight stops immediately when verified focus is lost", ComposerPreflightTests.FocusLoss)
+    ,("composer preflight cancellation prevents draft reads", ComposerPreflightTests.Cancellation)
+    ,("a fresh draft after preflight blocks outgoing text mutation", ComposerPreflightTests.FreshDraftBeforeWrite)
+    ,("an edit after preview blocks send confirmation", ComposerPreflightTests.EditedTextBeforeSend)
+    ,("a fresh draft during attachment preparation blocks attachment invocation", ComposerPreflightTests.FreshDraftBeforeAttachment)
+    ,("cancellation during final checks blocks native-text read and mutation", ComposerPreflightTests.CancelDuringFinalChecks)
+    ,("visible modeless channel menu does not block composer preflight", NativeRoomOpeningTests.ModelessOwnedMenu)
+    ,("owned modal classification blocks disabled-owner popups and ignores hidden popups", NativeRoomOpeningTests.DisabledOwnerModal)
+    ,("standard visible owned dialogs still block preflight", NativeRoomOpeningTests.StandardOwnedDialog)
+    ,("attachment discovery excludes the persistent modeless-window baseline", NativeRoomOpeningTests.NewAttachmentWindow)
+    ,("native semantic controls accept only a concrete owned child", NativeRoomOpeningTests.OwnedNativeControl)
+    ,("virtual semantic controls without an HWND fail closed", NativeRoomOpeningTests.RejectVirtualSemanticControl)
+    ,("semantic controls reject foreign processes, other rooms and owned popups", NativeRoomOpeningTests.RejectForeignSemanticControl)
+    ,("semantic controls reject reparenting after pattern resolution", NativeRoomOpeningTests.RejectReparentedSemanticControl)
+    ,("file-name edits must belong to the exact file dialog", NativeRoomOpeningTests.FilenameEditScope)
+    ,("cancellation during a native-text read prevents subsequent mutation", ComposerPreflightTests.CancelDuringNativeRead)
+    ,("changed filenames after final ownership checks prevent file-open invocation", ComposerPreflightTests.FilenameChangesBeforeOpen)
 };
 int failures = 0;
 foreach (var (name, test) in tests) { try { await test(); Console.WriteLine("PASS " + name); } catch (Exception e) { failures++; Console.WriteLine("FAIL " + name + ": " + e.Message); } }
@@ -66,6 +93,12 @@ static async Task ActualStrictResolver() {
     var client = new OpeningClient(); var item = Item();
     await new SendCoordinator(client).RunAsync(new(), [item], false, _ => { }, () => { }, default);
     Check(item.Status == "실패" && client.Opened == 0 && client.Delivered == 0, "native dry-run opener authorized actual delivery");
+}
+static async Task ReadOnlyLessonDryRun() {
+    var client = new OpeningClient(false); var item = Item(); var database = new AppDatabase();
+    await new SendCoordinator(client).RunAsync(database, [item], true, _ => { }, () => { }, default);
+    Check(item.Status == "실패" && database.Logs.Single().Detail?.Contains("채팅방은 열렸으나 발송 입력란이 없습니다", StringComparison.Ordinal) == true && client.Delivered == 0,
+        "lesson preflight treated a read-only room as send-capable");
 }
 static async Task Success() {
     var fake = new FakeClient(); var db = new AppDatabase(); var item = Item(); var states = new List<string>();
@@ -167,16 +200,6 @@ static async Task InterruptedDryRun() {
     await new SendCoordinator(fake).RunAsync(recovered, [item], false, _ => { }, () => { }, default);
     Check(item.Status == "전송 요청 완료" && fake.Resolves == 1, "interrupted dry-run incorrectly blocked a real send");
 }
-static Task ComposerFocus() {
-    bool focused = false;
-    WindowsKakaoClient.RequireEmptyAfterFocus(() => focused = true, () => focused ? "" : "챗봇에게 메시지 입력");
-    Check(focused, "composer was read before focus"); return Task.CompletedTask;
-}
-static Task ComposerDraft() {
-    const string draft = "existing reviewed-by-user draft"; bool rejected = false;
-    try { WindowsKakaoClient.RequireEmptyAfterFocus(() => { }, () => draft); } catch (InvalidOperationException) { rejected = true; }
-    Check(rejected, "focus accepted a nonempty draft"); return Task.CompletedTask;
-}
 static async Task NativeCancelled() {
     using var cts = new CancellationTokenSource(); cts.Cancel(); bool cancelled = false;
     try { await new WindowsKakaoClient().ResolveAsync("not-a-real-room", cts.Token); } catch (OperationCanceledException) { cancelled = true; }
@@ -201,9 +224,9 @@ sealed class FakeClient : IChatClient {
     public Task CompleteAsync(ChatTarget target, CancellationToken ct) { Effects.Add("complete"); return Task.CompletedTask; }
 }
 
-sealed class OpeningClient : IChatClient, IDryRunChatClient {
+sealed class OpeningClient(bool canCompose = true) : IChatClient, IDryRunChatClient {
     public int Opened; public int Delivered;
-    public Task<RoomOpenDryRunResult> OpenRoomDryRunAsync(string room, CancellationToken ct) { Opened++; return Task.FromResult(new RoomOpenDryRunResult(room, false, new(42, 1, room, 2))); }
+    public Task<RoomOpenDryRunResult> OpenRoomDryRunAsync(string room, CancellationToken ct) { Opened++; return Task.FromResult(new RoomOpenDryRunResult(room, false, new(42, 1, room, canCompose ? 2 : 0))); }
     public Task<ChatTarget> ResolveAsync(string room, CancellationToken ct) => throw new InvalidOperationException("strict resolution rejected an inaccessible result list");
     public Task SendTextAsync(ChatTarget target, string text, CancellationToken ct) { Delivered++; return Task.CompletedTask; }
     public Task SendFilesAsync(ChatTarget target, IReadOnlyList<string> paths, CancellationToken ct) { Delivered++; return Task.CompletedTask; }

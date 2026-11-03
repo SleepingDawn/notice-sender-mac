@@ -3,7 +3,10 @@ using NoticeSender.Core;
 namespace NoticeSender.Automation;
 
 public record ChatTarget(int ProcessId, nint WindowHandle, string RoomName, nint ComposerHandle);
-public sealed record RoomOpenDryRunResult(string RoomName, bool WasAlreadyOpen, ChatTarget Target);
+public sealed record RoomOpenDryRunResult(string RoomName, bool WasAlreadyOpen, ChatTarget Target)
+{
+    public bool CanCompose => Target.ComposerHandle != 0;
+}
 
 public interface IDryRunChatClient
 {

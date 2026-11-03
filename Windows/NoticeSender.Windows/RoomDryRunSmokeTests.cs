@@ -39,6 +39,14 @@ internal static class RoomDryRunSmokeTests
                 Require(json.RootElement.GetProperty("mode").GetString() == "room-open-only" && json.RootElement.GetProperty("completed").GetBoolean(), "최종 JSON 보고서 누락");
             Require(snapshots.Any(s => { using var d = JsonDocument.Parse(s); return d.RootElement.GetProperty("successCount").GetInt32() == 1; }), "방별 중간 보고서 누락");
 
+            client = new FakeDryRunClient { ReadOnlyRoom = true };
+            result = await new RoomDryRunRunner(client).RunAsync(new[] { "가상 읽기 전용 방" }, Path.Combine(folder, "read-only.json"), null, CancellationToken.None);
+            Require(result.Success && result.SuccessCount == 1 && result.Rooms[0].CanCompose == false && result.Rooms[0].ComposerHandle == 0
+                && result.Rooms[0].DisplayStatus.Contains("발송 입력란 없음", StringComparison.Ordinal), "입력란 없는 방의 열기 완료 / 기능 구분 실패");
+            client = new FakeDryRunClient { InvalidWindow = true };
+            result = await new RoomDryRunRunner(client).RunAsync(new[] { "가상 잘못된 창" }, Path.Combine(folder, "invalid-target.json"), null, CancellationToken.None);
+            Require(!result.Success && result.FailedCount == 1, "검증되지 않은 루트를 방 열기 성공으로 집계");
+
             // Continuing after the first failure would reach a third room and fail these assertions.
             client = new FakeDryRunClient { FailRoom = "없는 가상 방" };
             result = await new RoomDryRunRunner(client).RunAsync(new[] { "가상 방 B", "없는 가상 방", "접근하면 안 되는 방" }, Path.Combine(folder, "failure.json"), null, CancellationToken.None);
@@ -82,12 +90,14 @@ internal static class RoomDryRunSmokeTests
         internal List<string> Rooms { get; } = new();
         internal string? FailRoom { get; init; }
         internal Action? AfterOpen { get; init; }
+        internal bool ReadOnlyRoom { get; init; }
+        internal bool InvalidWindow { get; init; }
         public Task<RoomOpenDryRunResult> OpenRoomDryRunAsync(string exactRoomName, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Rooms.Add(exactRoomName);
             if (exactRoomName == FailRoom) throw new InvalidOperationException("가상 방을 찾을 수 없습니다.");
-            var result = new RoomOpenDryRunResult(exactRoomName, Rooms.Count == 1, new ChatTarget(42, 100, exactRoomName, 200));
+            var result = new RoomOpenDryRunResult(exactRoomName, Rooms.Count == 1, new ChatTarget(42, InvalidWindow ? 0 : 100, exactRoomName, ReadOnlyRoom ? 0 : 200));
             AfterOpen?.Invoke();
             return Task.FromResult(result);
         }

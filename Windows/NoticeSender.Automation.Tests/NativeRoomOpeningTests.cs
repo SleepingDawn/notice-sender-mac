@@ -121,6 +121,146 @@ internal static class NativeRoomOpeningTests
             throw new Exception("The native query did not activate the owned hidden search safely.");
         return Task.CompletedTask;
     }
+    public static Task DelayedResults()
+    {
+        using var host = new SearchHost(w => w.DelayResultAfterFirstConfirmation = true);
+        var windows = host.Windows;
+        var target = WindowsKakaoClient.FindNativeRoomSearch(new HashSet<int> { Environment.ProcessId });
+        WindowsKakaoClient.SearchNativeRoom(target, "delayed exact room", default);
+        AwaitRoom(target, "delayed exact room", default);
+        if (windows.EnterCount != 2 || windows.Entered != windows.Results || windows.Text(windows.Composer) != "keep this draft")
+            throw new Exception("Delayed results were not reconfirmed exactly once on their owned list.");
+        return Task.CompletedTask;
+    }
+    public static Task CappedConfirmations()
+    {
+        using var host = new SearchHost(_ => { });
+        var target = WindowsKakaoClient.FindNativeRoomSearch(new HashSet<int> { Environment.ProcessId });
+        WindowsKakaoClient.SearchNativeRoom(target, "never-ready exact room", default);
+        Reject(() => AwaitRoom(target, "never-ready exact room", default));
+        if (host.Windows.EnterCount != 3 || host.Windows.Text(host.Windows.Composer) != "keep this draft")
+            throw new Exception("Room-opening confirmation retries were not capped at three without composer changes.");
+        return Task.CompletedTask;
+    }
+    public static Task CancelDuringReadiness()
+    {
+        using var cts = new CancellationTokenSource();
+        using var host = new SearchHost(w => w.AfterFirstConfirmation = cts.Cancel);
+        var target = WindowsKakaoClient.FindNativeRoomSearch(new HashSet<int> { Environment.ProcessId });
+        WindowsKakaoClient.SearchNativeRoom(target, "cancelled readiness room", cts.Token);
+        bool cancelled = false;
+        try { AwaitRoom(target, "cancelled readiness room", cts.Token); } catch (OperationCanceledException) { cancelled = true; }
+        if (!cancelled || host.Windows.EnterCount != 1) throw new Exception("Cancellation allowed another result confirmation.");
+        return Task.CompletedTask;
+    }
+    public static Task QueryChangesDuringReadiness()
+    {
+        using var host = new SearchHost(w => w.AfterFirstConfirmation = () => w.ChangeQuery("different query"));
+        var target = WindowsKakaoClient.FindNativeRoomSearch(new HashSet<int> { Environment.ProcessId });
+        WindowsKakaoClient.SearchNativeRoom(target, "query changed while waiting", default);
+        Reject(() => AwaitRoom(target, "query changed while waiting", default));
+        if (host.Windows.EnterCount != 1) throw new Exception("Changed query allowed another result confirmation.");
+        return Task.CompletedTask;
+    }
+    public static Task OwnershipChangesDuringReadiness()
+    {
+        using var host = new SearchHost(w => w.AfterFirstConfirmation = w.RenameChatView);
+        var target = WindowsKakaoClient.FindNativeRoomSearch(new HashSet<int> { Environment.ProcessId });
+        WindowsKakaoClient.SearchNativeRoom(target, "ownership changed while waiting", default);
+        Reject(() => AwaitRoom(target, "ownership changed while waiting", default));
+        if (host.Windows.EnterCount != 1) throw new Exception("Changed ownership allowed another result confirmation.");
+        return Task.CompletedTask;
+    }
+    public static Task ReadOnlyOpeningCapability()
+    {
+        using var windows = new OwnedSearchWindows(); windows.MakeRoomReadOnly();
+        var target = InspectOpenedRoom(windows.Room, "unrelated room");
+        if (target.WindowHandle != windows.Room || target.RoomName != "unrelated room" || target.ComposerHandle != 0)
+            throw new Exception("A verified read-only room did not preserve its root identity with no composer capability.");
+        if (new RoomOpenDryRunResult(target.RoomName, true, target).CanCompose) throw new Exception("A read-only opening was reported as send-capable.");
+        return Task.CompletedTask;
+    }
+    public static Task AmbiguousOpeningCapability()
+    {
+        using var windows = new OwnedSearchWindows(); windows.AddAnotherComposer();
+        Reject(() => InspectOpenedRoom(windows.Room, "unrelated room"));
+        if (windows.Text(windows.Composer) != "keep this draft") throw new Exception("Ambiguous composer inspection changed a draft.");
+        return Task.CompletedTask;
+    }
+    public static Task ModelessOwnedMenu()
+    {
+        using var windows = new OwnedSearchWindows(); windows.CreateOwnedPopup("EVA_Window_Dblclk");
+        if (Blocking(windows.Room).Length != 0) throw new Exception("A visible modeless channel menu blocked composer preflight.");
+        if (windows.Text(windows.Composer) != "keep this draft") throw new Exception("Popup classification modified the composer.");
+        return Task.CompletedTask;
+    }
+    public static Task DisabledOwnerModal()
+    {
+        using var windows = new OwnedSearchWindows(); var popup = windows.CreateOwnedPopup("EVA_Window_Dblclk"); windows.DisableRoom();
+        if (!Blocking(windows.Room).SequenceEqual(new[] { popup })) throw new Exception("A visible owned modal with a disabled room was not blocked.");
+        windows.HidePopup(popup);
+        if (Blocking(windows.Room).Length != 0) throw new Exception("A hidden old owned popup was treated as an active modal.");
+        return Task.CompletedTask;
+    }
+    public static Task StandardOwnedDialog()
+    {
+        using var windows = new OwnedSearchWindows(); var dialog = windows.CreateOwnedPopup("#32770");
+        if (!Blocking(windows.Room).SequenceEqual(new[] { dialog })) throw new Exception("A standard owned dialog was not blocked.");
+        return Task.CompletedTask;
+    }
+    public static Task NewAttachmentWindow()
+    {
+        using var windows = new OwnedSearchWindows(); var menu = windows.CreateOwnedPopup("EVA_Window_Dblclk");
+        var picker = windows.CreateOwnedPopup("EVA_Window_Dblclk");
+        windows.DisableRoom(); // A new modal may disable the owner; its old modeless channel menu must remain excluded.
+        var result = WindowsKakaoClient.AttachmentWindowHandles(windows.Room, Environment.ProcessId, new HashSet<nint> { menu });
+        if (!result.SequenceEqual(new[] { picker })) throw new Exception("Persistent channel menu contaminated new attachment-window discovery.");
+        return Task.CompletedTask;
+    }
+    // Added while Windows application control blocks execution. Compile-only until an authorized execution environment is available.
+    public static Task OwnedNativeControl()
+    {
+        using var windows = new OwnedSearchWindows();
+        WindowsKakaoClient.RequireNativeControlScope(windows.Room, Environment.ProcessId, windows.Composer, Environment.ProcessId);
+        return Task.CompletedTask;
+    }
+    public static Task RejectVirtualSemanticControl()
+    {
+        using var windows = new OwnedSearchWindows();
+        Reject(() => WindowsKakaoClient.RequireNativeControlScope(windows.Room, Environment.ProcessId, 0, Environment.ProcessId));
+        return Task.CompletedTask;
+    }
+    public static Task RejectForeignSemanticControl()
+    {
+        using var windows = new OwnedSearchWindows();
+        Reject(() => WindowsKakaoClient.RequireNativeControlScope(windows.Room, Environment.ProcessId, windows.Search, Environment.ProcessId));
+        Reject(() => WindowsKakaoClient.RequireNativeControlScope(windows.Room, Environment.ProcessId, windows.Composer, -1));
+        var menu = windows.CreateOwnedPopup("EVA_Window_Dblclk");
+        Reject(() => WindowsKakaoClient.RequireNativeControlScope(windows.Room, Environment.ProcessId, menu, Environment.ProcessId));
+        return Task.CompletedTask;
+    }
+    public static Task RejectReparentedSemanticControl()
+    {
+        using var windows = new OwnedSearchWindows();
+        WindowsKakaoClient.RequireNativeControlScope(windows.Room, Environment.ProcessId, windows.Composer, Environment.ProcessId);
+        windows.ReparentComposer(); // Simulates a scope change after the semantic pattern/action was resolved.
+        Reject(() => WindowsKakaoClient.RequireNativeControlScope(windows.Room, Environment.ProcessId, windows.Composer, Environment.ProcessId));
+        if (windows.Text(windows.Composer) != "keep this draft") throw new Exception("Scope validation changed the draft.");
+        return Task.CompletedTask;
+    }
+    public static Task FilenameEditScope()
+    {
+        using var windows = new OwnedSearchWindows(); var dialog = windows.CreateOwnedPopup("#32770"); var filename = windows.CreateFilenameEdit(dialog);
+        WindowsKakaoClient.RequireNativeControlScope(dialog, Environment.ProcessId, filename, Environment.ProcessId);
+        Reject(() => WindowsKakaoClient.RequireNativeControlScope(windows.Room, Environment.ProcessId, filename, Environment.ProcessId));
+        return Task.CompletedTask;
+    }
+    private static nint[] Blocking(nint room)
+        => WindowsKakaoClient.BlockingOwnedWindowHandles(room, Environment.ProcessId);
+    private static ChatTarget InspectOpenedRoom(nint root, string name)
+        => WindowsKakaoClient.InspectOpenedRoom(root, name);
+    private static void AwaitRoom(WindowsKakaoClient.NativeRoomSearch target, string room, CancellationToken token)
+        => WindowsKakaoClient.WaitForNativeRoom(target, room, token);
     private static void Reject(Action action)
     {
         try { action(); } catch (InvalidOperationException) { return; }
@@ -136,10 +276,15 @@ internal static class NativeRoomOpeningTests
         public nint Search { get; }
         public nint OtherEdit { get; }
         public nint Composer { get; }
+        public nint Room { get; }
         private readonly nint main;
         private readonly nint view;
         public nint Results { get; }
         public bool TamperSearch { get; set; }
+        public bool DelayResultAfterFirstConfirmation { get; set; }
+        public Action? AfterFirstConfirmation { get; set; }
+        private long resultReadyAt = long.MaxValue;
+        private bool createdDelayedRoom;
         private bool activateResults;
         public nint Entered { get; private set; }
         public int EnterCount { get; private set; }
@@ -161,8 +306,8 @@ internal static class NativeRoomOpeningTests
             Results = Create("EVA_VH_ListControl_Dblclk", "SearchListCtrl_synthetic", view, 1003);
             var friendView = Create("EVA_Window", "FriendListView_synthetic", online, 1149);
             OtherEdit = Create("Edit", "keep other search", friendView, 100);
-            var room = Create("EVA_Window_Dblclk", "unrelated room", 0, 0);
-            Composer = Create("Edit", "keep this draft", room, 100);
+            Room = Create("EVA_Window_Dblclk", "unrelated room", 0, 0);
+            Composer = Create("Edit", "keep this draft", Room, 100);
         }
         private nint Create(string name, string title, nint parent, int id)
         {
@@ -172,7 +317,20 @@ internal static class NativeRoomOpeningTests
         }
         private nint WindowProcedure(nint window, uint message, nuint wParam, nint lParam)
         {
-            if (message == 0x100 && wParam == 0xD) { Entered = window; EnterCount++; }
+            if (message == 0x100 && wParam == 0xD)
+            {
+                Entered = window; EnterCount++;
+                if (EnterCount == 1)
+                {
+                    if (DelayResultAfterFirstConfirmation) resultReadyAt = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 3 / 10;
+                    AfterFirstConfirmation?.Invoke();
+                }
+                else if (window == Results && DelayResultAfterFirstConfirmation && Stopwatch.GetTimestamp() >= resultReadyAt && !createdDelayedRoom)
+                {
+                    createdDelayedRoom = true;
+                    Create("EVA_Window_Dblclk", "delayed exact room", 0, 0);
+                }
+            }
             if (message == 0x111 && (wParam >> 16) == 0x300 && lParam == Search)
             {
                 if (activateResults) { activateResults = false; ShowWindow(Results, 5); }
@@ -185,7 +343,20 @@ internal static class NativeRoomOpeningTests
         public void AddMoreView() => Create("EVA_Window", "MoreView_synthetic", main, 1075);
         public void HideChatView() => ShowWindow(view, 0);
         public void DuplicateSearch() => Create("Edit", "", view, 100);
+        public void MakeRoomReadOnly() => DestroyWindow(Composer);
+        public void AddAnotherComposer() => Create("Edit", "keep second draft", Room, 101);
+        public nint CreateOwnedPopup(string className)
+        {
+            var popup = CreateWindowEx(0, className, "", 0x90000000, 0, 0, 1, 1, Room, 0, 0, 0);
+            if (popup == 0) throw new Exception("Synthetic owned popup creation failed: " + Marshal.GetLastWin32Error());
+            windows.Add(popup); return popup;
+        }
+        public void DisableRoom() => EnableWindow(Room, false);
+        public void ReparentComposer() => SetParent(Composer, main);
+        public nint CreateFilenameEdit(nint dialog) => Create("Edit", "existing filename", dialog, 1148);
+        public void HidePopup(nint popup) => ShowWindow(popup, 0);
         public void RenameChatView() => SetWindowText(view, "FriendListView_synthetic");
+        public void ChangeQuery(string value) => SetWindowText(Search, value);
         public void HideSearchUntilQuery() { ShowWindow(Search, 0); EnableWindow(Search, false); ShowWindow(Results, 0); activateResults = true; }
         public void AssertUntouched()
         {
@@ -203,6 +374,29 @@ internal static class NativeRoomOpeningTests
         }
     }
 
+    private sealed class SearchHost : IDisposable
+    {
+        private readonly ManualResetEventSlim stop = new();
+        private readonly Thread thread;
+        public OwnedSearchWindows Windows { get; }
+        public SearchHost(Action<OwnedSearchWindows> configure)
+        {
+            var ready = new TaskCompletionSource<OwnedSearchWindows>(TaskCreationOptions.RunContinuationsAsynchronously);
+            thread = new Thread(() =>
+            {
+                try
+                {
+                    using var windows = new OwnedSearchWindows();
+                    configure(windows); ready.SetResult(windows);
+                    while (!stop.IsSet) { windows.Pump(); Thread.Sleep(5); }
+                }
+                catch (Exception ex) { ready.TrySetException(ex); }
+            }) { IsBackground = true };
+            thread.Start(); Windows = ready.Task.GetAwaiter().GetResult();
+        }
+        public void Dispose() { stop.Set(); if (!thread.Join(3000)) throw new Exception("Synthetic search window thread did not stop."); stop.Dispose(); }
+    }
+
     [UnmanagedFunctionPointer(CallingConvention.Winapi)] private delegate nint WndProc(nint window, uint message, nuint wParam, nint lParam);
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct WindowClass { public uint Style; public nint Procedure; public int ClassExtra; public int WindowExtra; public nint Instance; public nint Icon; public nint Cursor; public nint Background; public string? Menu; public string ClassName; }
     [StructLayout(LayoutKind.Sequential)] private struct Message { public nint Window; public uint Id; public nuint WParam; public nint LParam; public uint Time; public int X; public int Y; public uint Private; }
@@ -217,6 +411,7 @@ internal static class NativeRoomOpeningTests
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool SetWindowText(nint window, string text);
     [DllImport("user32.dll")] private static extern bool ShowWindow(nint window, int show);
     [DllImport("user32.dll")] private static extern bool EnableWindow(nint window, bool enabled);
+    [DllImport("user32.dll")] private static extern nint SetParent(nint child, nint parent);
     [DllImport("user32.dll")] private static extern bool PeekMessage(out Message message, nint window, uint min, uint max, uint remove);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref Message message);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint DispatchMessage(ref Message message);

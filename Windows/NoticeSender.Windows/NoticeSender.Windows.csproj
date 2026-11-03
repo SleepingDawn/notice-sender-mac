@@ -11,6 +11,7 @@
     <RootNamespace>NoticeSender.Windows</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
     <ProjectReference Include="../NoticeSender.Core/NoticeSender.Core.csproj" />
     <ProjectReference Include="../NoticeSender.Automation/NoticeSender.Automation.csproj" />
   </ItemGroup>
