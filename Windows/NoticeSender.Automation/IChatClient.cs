@@ -3,6 +3,12 @@ using NoticeSender.Core;
 namespace NoticeSender.Automation;
 
 public record ChatTarget(int ProcessId, nint WindowHandle, string RoomName, nint ComposerHandle);
+public sealed record RoomOpenDryRunResult(string RoomName, bool WasAlreadyOpen, ChatTarget Target);
+
+public interface IDryRunChatClient
+{
+    Task<RoomOpenDryRunResult> OpenRoomDryRunAsync(string exactRoomName, CancellationToken cancellationToken);
+}
 
 public interface IChatClient
 {

@@ -22,5 +22,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: NoticeSender-Windows-x64
-          path: dist/NoticeSender-3.1.0-Windows-x64.zip
+          path: dist/NoticeSender-3.1.1-Windows-x64.zip
           if-no-files-found: error

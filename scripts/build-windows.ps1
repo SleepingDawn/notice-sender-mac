@@ -40,7 +40,7 @@ if ($Publish) {
     Invoke-DotNet publish $appProject --configuration Release --runtime win-x64 --self-contained true '-p:PublishSingleFile=false' --output $output
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\README.md') -Destination (Join-Path $output 'Windows-Guide.md') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\TESTING.md') -Destination (Join-Path $output 'TESTING.md') -Force
-    $archive = Join-Path $repository 'dist\NoticeSender-3.1.0-Windows-x64.zip'
+    $archive = Join-Path $repository 'dist\NoticeSender-3.1.1-Windows-x64.zip'
     Compress-Archive -LiteralPath $output -DestinationPath $archive -Force
     Write-Output "배포 파일: $archive"
 }

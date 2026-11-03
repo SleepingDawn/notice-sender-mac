@@ -2,14 +2,86 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Text;
 using System.Windows.Automation;
 
 namespace NoticeSender.Automation;
 
 /// <summary>Targeted UIA/Win32 adapter. Composer focus is explicit; it never types into the currently focused window or uses coordinates, clipboard, or global keyboard input.</summary>
-public sealed class WindowsKakaoClient : IChatClient
+public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
 {
+    internal sealed record NativeRoomSearch(int ProcessId, nint MainWindow, nint OnlineView, nint ChatView, nint SearchEdit, nint Results);
+
+    /// <summary>Opens and verifies a room without focusing, changing, or sending its composer. Native results with no accessible names are permitted only on this dry-run path.</summary>
+    public Task<RoomOpenDryRunResult> OpenRoomDryRunAsync(string exactRoomName, CancellationToken cancellationToken) => OnSta(() =>
+    {
+        using var lease = AcquireRoomOpeningLease(cancellationToken);
+        if (string.IsNullOrWhiteSpace(exactRoomName)) throw new InvalidOperationException("정확한 채팅방 이름이 필요합니다.");
+        var rooms = RoomWindows(exactRoomName);
+        if (rooms.Length > 1) throw new InvalidOperationException("동일한 이름의 채팅방이 여러 개 열려 있습니다.");
+        bool wasAlreadyOpen = rooms.Length == 1;
+        if (!wasAlreadyOpen)
+        {
+            var search = FindNativeRoomSearch(KakaoProcessIds());
+            CheckKakaoProcess(search.ProcessId);
+            SearchNativeRoom(search, exactRoomName, cancellationToken);
+            WaitUntil(() => RoomWindows(exactRoomName).Length > 0, cancellationToken, "검색 결과에서 정확한 이름의 채팅방이 열리지 않았습니다. 메시지·파일을 전송하지 않았습니다.");
+            rooms = RoomWindows(exactRoomName);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        if (rooms.Length != 1) throw new InvalidOperationException("채팅방 이름이 고유하지 않습니다.");
+        var room = rooms[0];
+        var composer = UniqueComposer(room);
+        var target = new ChatTarget(room.Current.ProcessId, room.Current.NativeWindowHandle, exactRoomName, composer.Current.NativeWindowHandle);
+        Validate(target);
+        return new RoomOpenDryRunResult(exactRoomName, wasAlreadyOpen, target);
+    }, cancellationToken);
+
+    internal static NativeRoomSearch FindNativeRoomSearch(IReadOnlySet<int> processIds)
+    {
+        var searches = new List<NativeRoomSearch>();
+        foreach (var main in DiscoverProcessWindows(processIds).Where(w => Native.Title(w) == "카카오톡" && Native.ClassName(w) == "EVA_Window_Dblclk" && Native.IsWindowVisible(w) && Native.IsWindowEnabled(w)))
+        {
+            int pid = Native.Pid(main);
+            var children = Native.Children(main);
+            bool Owned(nint child) => Native.Pid(child) == pid && Native.IsChild(main, child);
+            if (children.Any(w => Owned(w) && Native.IsWindowVisible(w) && (Native.Title(w).StartsWith("LockModeView_", StringComparison.Ordinal) || Native.Title(w).StartsWith("MoreView_", StringComparison.Ordinal)))) continue;
+            foreach (var online in children.Where(w => Owned(w) && Native.Parent(w) == main && Native.ControlId(w) == 132 && Native.ClassName(w) == "EVA_ChildWindow" && Native.Title(w).StartsWith("OnlineMainView_", StringComparison.Ordinal) && Native.IsWindowVisible(w) && Native.IsWindowEnabled(w)))
+            foreach (var view in children.Where(w => Owned(w) && Native.Parent(w) == online && Native.ControlId(w) == 1150 && Native.ClassName(w) == "EVA_Window" && Native.Title(w).StartsWith("ChatRoomListView_", StringComparison.Ordinal) && Native.IsWindowVisible(w) && Native.IsWindowEnabled(w)))
+            {
+                var edits = children.Where(w => Owned(w) && Native.Parent(w) == view && Native.ControlId(w) == 100 && Native.ClassName(w) == "Edit").ToArray();
+                var results = children.Where(w => Owned(w) && Native.Parent(w) == view && Native.ControlId(w) == 1003 && Native.ClassName(w) == "EVA_VH_ListControl_Dblclk" && Native.Title(w).StartsWith("SearchListCtrl_", StringComparison.Ordinal)).ToArray();
+                if (edits.Length == 1 && results.Length == 1) searches.Add(new(pid, main, online, view, edits[0], results[0]));
+            }
+        }
+        if (searches.Count != 1) throw new InvalidOperationException("카카오톡 메인 창에 속한 고유한 채팅방 검색 입력란·결과 목록을 확인할 수 없습니다.");
+        return searches[0];
+    }
+
+    private static void ValidateNativeSearch(NativeRoomSearch search)
+    {
+        if (FindNativeRoomSearch(new HashSet<int> { search.ProcessId }) != search)
+            throw new InvalidOperationException("채팅방 검색 컨트롤 소유권이 변경되었습니다.");
+    }
+
+    internal static void SearchNativeRoom(NativeRoomSearch search, string roomName, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        ValidateNativeSearch(search);
+        // Kakao keeps this exact owned Edit hidden until EN_CHANGE activates search. Do not enable arbitrary edits or touch the composer.
+        Native.SetText(search.SearchEdit, roomName);
+        ValidateNativeSearch(search);
+        if (Native.Text(search.SearchEdit) != roomName) throw new InvalidOperationException("검색어 확인에 실패했습니다.");
+        WaitUntil(() => { ValidateNativeSearch(search); return Native.IsWindowVisible(search.Results); }, token, "채팅방 검색 결과 목록이 활성화되지 않았습니다.");
+        token.ThrowIfCancellationRequested();
+        ValidateNativeSearch(search);
+        if (Native.Text(search.SearchEdit) != roomName) throw new InvalidOperationException("검색어가 변경되어 채팅방을 열지 않았습니다.");
+        if (!Native.IsWindowVisible(search.Results) || !Native.IsWindowEnabled(search.Results))
+            throw new InvalidOperationException("채팅방 검색 결과 목록이 비활성화되어 채팅방을 열지 않았습니다.");
+        // The search Edit stays disabled in Kakao's native search mode. Queue confirmation only to its visible result list.
+        Native.PostSearchEnter(search.Results);
+    }
     internal static nint[] DiscoverProcessWindows(IReadOnlySet<int> processIds) => Native.TopLevelWindows().Where(w => processIds.Contains(Native.Pid(w))).ToArray();
     internal static void RequireEmptyAfterFocus(Action focus, Func<string> read)
     {
@@ -19,6 +91,7 @@ public sealed class WindowsKakaoClient : IChatClient
     }
     public Task<ChatTarget> ResolveAsync(string exactRoomName, CancellationToken cancellationToken) => OnSta(() =>
     {
+        using var lease = AcquireRoomOpeningLease(cancellationToken);
         if (string.IsNullOrWhiteSpace(exactRoomName)) throw new InvalidOperationException("정확한 채팅방 이름이 필요합니다.");
         var rooms = RoomWindows(exactRoomName);
         if (rooms.Length > 1) throw new InvalidOperationException("동일한 이름의 채팅방이 여러 개 열려 있습니다.");
@@ -193,6 +266,11 @@ public sealed class WindowsKakaoClient : IChatClient
         {
             cancellationToken.ThrowIfCancellationRequested();
             lines.Add($"HWND {hwnd}, PID {Native.Pid(hwnd)}, title [{Native.Title(hwnd)}], native class {Native.ClassName(hwnd)}, visible {Native.IsWindowVisible(hwnd)}, drop targets [{string.Join(',', Native.DropTargets(hwnd))}]");
+            foreach (var child in Native.Children(hwnd))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                lines.Add($"  native child HWND {child}, PID {Native.Pid(child)}, parent {Native.Parent(child)}, id {Native.ControlId(child)}, class {Native.ClassName(child)}, visible {Native.IsWindowVisible(child)}, enabled {Native.IsWindowEnabled(child)}");
+            }
             try
             {
                 var window = AutomationElement.FromHandle(hwnd);
@@ -200,6 +278,8 @@ public sealed class WindowsKakaoClient : IChatClient
                 foreach (var element in window.FindAll(TreeScope.Descendants, Condition.TrueCondition).Cast<AutomationElement>())
                 {
                     var current = element.Current;
+                    if (Native.Title(hwnd) == "카카오톡")
+                        lines.Add($"  main UIA HWND {current.NativeWindowHandle}, role {current.ControlType.ProgrammaticName}, id {current.AutomationId}, class {current.ClassName}, enabled {current.IsEnabled}, name [{current.Name}], patterns [{string.Join(',', element.GetSupportedPatterns().Select(p => p.ProgrammaticName))}]");
                     if (current.ControlType != ControlType.Edit && current.ControlType != ControlType.Document && current.AutomationId != "202") continue;
                     int? length = current.NativeWindowHandle != 0 && current.ProcessId == Native.Pid(hwnd) && Native.IsChild(hwnd, current.NativeWindowHandle)
                         ? Native.Text(current.NativeWindowHandle).Length : null;
@@ -316,10 +396,43 @@ public sealed class WindowsKakaoClient : IChatClient
         thread.SetApartmentState(ApartmentState.STA); thread.Start(); return source.Task;
     }
 
+    private static IDisposable AcquireRoomOpeningLease(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        // The native search box is shared by every app/diagnostic window and process in this user's desktop session.
+        using var identity = WindowsIdentity.GetCurrent();
+        var mutex = new Mutex(false, @"Local\NoticeSender.Kakao.RoomOpening." + (identity.User?.Value ?? throw new InvalidOperationException("현재 사용자 소유권을 확인할 수 없습니다.")));
+        try
+        {
+            if (!mutex.WaitOne(0)) throw new InvalidOperationException("다른 채팅방 열기 작업이 실행 중입니다. 완료 후 다시 시도해 주세요.");
+            return new RoomOpeningLease(mutex);
+        }
+        catch (AbandonedMutexException)
+        {
+            mutex.ReleaseMutex(); mutex.Dispose();
+            throw new InvalidOperationException("이전 채팅방 열기 작업이 중단되었습니다. 카카오톡 상태를 확인한 후 다시 시도해 주세요.");
+        }
+        catch { mutex.Dispose(); throw; }
+    }
+
+    private sealed class RoomOpeningLease(Mutex mutex) : IDisposable
+    {
+        private Mutex? held = mutex;
+        public void Dispose()
+        {
+            var lease = Interlocked.Exchange(ref held, null);
+            if (lease is null) return;
+            try { lease.ReleaseMutex(); } finally { lease.Dispose(); }
+        }
+    }
+
     private static class Native
     {
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindow(nint hWnd);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowVisible(nint hWnd);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowEnabled(nint hWnd);
+        [DllImport("user32.dll", EntryPoint = "GetParent")] public static extern nint Parent(nint hWnd);
+        [DllImport("user32.dll", EntryPoint = "GetDlgCtrlID")] public static extern int ControlId(nint hWnd);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsChild(nint parent, nint child);
         [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint window, out int process);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(nint window, StringBuilder text, int count);
@@ -348,6 +461,12 @@ public sealed class WindowsKakaoClient : IChatClient
                 int error = Marshal.GetLastPInvokeError();
                 throw new Win32Exception(error, $"EnumWindows failed (Win32 {error}, collected {windows.Count} windows, PID {Environment.ProcessId}, session {Process.GetCurrentProcess().SessionId}).");
             }
+            return windows.ToArray();
+        }
+        public static nint[] Children(nint root)
+        {
+            var windows = new List<nint>();
+            EnumChildWindows(root, (window, _) => { windows.Add(window); return true; }, 0);
             return windows.ToArray();
         }
         public static bool WritableRichEdit(nint window)
@@ -403,5 +522,10 @@ public sealed class WindowsKakaoClient : IChatClient
             finally { Marshal.FreeHGlobal(memory); }
         }
         public static void Key(nint window, uint message, int key) => Message(window, message, (nuint)key, message == 0x101 ? unchecked((nint)0xC0000001) : 1);
+        public static void PostSearchEnter(nint window)
+        {
+            if (!PostMessage(window, 0x100, 0xD, 0x001C0001) || !PostMessage(window, 0x101, 0xD, unchecked((nint)0xC01C0001)))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "채팅방 검색 확인 요청에 실패했습니다.");
+        }
     }
 }

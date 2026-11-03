@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Windows;
 using NoticeSender.Automation;
@@ -10,9 +11,14 @@ namespace NoticeSender.Windows;
 
 internal static class Program
 {
+    internal static bool ModesAreCompatible(string[] args) => !args.Contains("--dry-run-rooms") ||
+        !args.Any(arg => arg is "--demo" or "--smoke-test" or "--diagnose-kakao");
+
     [STAThread]
     public static int Main(string[] args)
     {
+        if (!ModesAreCompatible(args)) return 1;
+        if (args.Contains("--dry-run-rooms")) return RunRoomDryRun(args);
         bool smoke = args.Contains("--smoke-test");
         bool demo = smoke || args.Contains("--demo");
         if (args.Contains("--diagnose-kakao"))
@@ -42,9 +48,9 @@ internal static class Program
             app.MainWindow = window;
             if (smoke)
             {
-                window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(new Action(() =>
+                window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(new Action(async () =>
                 {
-                    try { window.VerifySmokeTest(); app.Shutdown(0); }
+                    try { window.VerifySmokeTest(); await RoomDryRunSmokeTests.RunAsync(); app.Shutdown(0); }
                     catch (Exception ex) { File.WriteAllText(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-error.txt"), ex.ToString()); app.Shutdown(2); }
                 }));
             }
@@ -53,6 +59,39 @@ internal static class Program
         catch (Exception ex)
         {
             if (!smoke) MessageBox.Show("데이터를 열지 못했습니다. 기존 파일은 교체하지 않았습니다.\n\n" + ex.Message, "공지발송 시작 실패");
+            return 1;
+        }
+    }
+
+    private static int RunRoomDryRun(string[] args)
+    {
+        try
+        {
+            string? Value(string name, bool required)
+            {
+                int index = Array.IndexOf(args, name);
+                if (index < 0)
+                {
+                    if (required) throw new ArgumentException(name + " 뒤에 파일 경로가 필요합니다.");
+                    return null;
+                }
+                if (args.Count(a => a == name) != 1 || index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))
+                    throw new ArgumentException(name + " 뒤에 파일 경로 하나를 지정하세요.");
+                return args[index + 1];
+            }
+            using var json = JsonDocument.Parse(File.ReadAllText(Value("--dry-run-rooms", true)!));
+            if (json.RootElement.ValueKind != JsonValueKind.Array || json.RootElement.EnumerateArray().Any(e => e.ValueKind != JsonValueKind.String))
+                throw new ArgumentException("채팅방 목록 파일은 정확한 방 이름으로 이루어진 JSON 배열이어야 합니다.");
+            var rooms = RoomDryRunRunner.ValidateRooms(json.RootElement.EnumerateArray().Select(e => e.GetString()!));
+            string? reportPath = Value("--report", false);
+            var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+            Ui.InstallStyles(app);
+            // This path intentionally constructs no main window, store, or database mutex.
+            return app.Run(new RoomDryRunWindow(rooms, reportPath, autoStart: true, exitAfterFinish: args.Contains("--exit-after-dry-run")));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "방 열기 드라이런 시작 실패");
             return 1;
         }
     }

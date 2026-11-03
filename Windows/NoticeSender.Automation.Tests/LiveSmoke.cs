@@ -63,16 +63,23 @@ internal static class LiveSmoke
                     if (client.Events.Count != before) throw new InvalidOperationException("Protected item unexpectedly retried.");
                 }
             }
-            if (dry && client.Events.Any(e => !e.StartsWith("resolve:", StringComparison.Ordinal))) throw new InvalidOperationException("Dry run entered a send operation.");
+            if (dry && client.Events.Any(e => !e.StartsWith("resolve:", StringComparison.Ordinal) && !e.StartsWith("open-dry-run:", StringComparison.Ordinal))) throw new InvalidOperationException("Dry run entered a send operation.");
         }
         catch (Exception ex) { failure = ex.ToString(); }
         Save(); Console.WriteLine("Live report: " + output);
         return failure is null ? 0 : 1;
     }
 
-    private sealed class TraceClient(IChatClient inner) : IChatClient
+    private sealed class TraceClient(IChatClient inner) : IChatClient, IDryRunChatClient
     {
         public List<string> Events { get; } = [];
+        public async Task<RoomOpenDryRunResult> OpenRoomDryRunAsync(string room, CancellationToken ct)
+        {
+            Events.Add("open-dry-run:start:" + room);
+            var result = inner is IDryRunChatClient opener ? await opener.OpenRoomDryRunAsync(room, ct) : new RoomOpenDryRunResult(room, true, await inner.ResolveAsync(room, ct));
+            Events.Add("open-dry-run:" + (result.WasAlreadyOpen ? "existing:" : "newly-opened:") + room);
+            return result;
+        }
         public async Task<ChatTarget> ResolveAsync(string room, CancellationToken ct) { Events.Add("resolve:" + room); return await inner.ResolveAsync(room, ct); }
         public async Task SendTextAsync(ChatTarget target, string text, CancellationToken ct) { Events.Add("text:" + text); await inner.SendTextAsync(target, text, ct); }
         public async Task SendFilesAsync(ChatTarget target, IReadOnlyList<string> files, CancellationToken ct) { Events.Add("files:" + string.Join("|", files)); await inner.SendFilesAsync(target, files, ct); }

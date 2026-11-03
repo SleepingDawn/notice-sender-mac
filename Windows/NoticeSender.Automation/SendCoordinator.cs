@@ -44,7 +44,9 @@ public sealed class SendCoordinator(IChatClient client)
                 persist(); progress(original);
                 try
                 {
-                    var target = await client.ResolveAsync(item.ChatRoomName, cancellationToken);
+                    var target = dryRun && client is IDryRunChatClient opener
+                        ? (await opener.OpenRoomDryRunAsync(item.ChatRoomName, cancellationToken)).Target
+                        : await client.ResolveAsync(item.ChatRoomName, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!dryRun)
                     {

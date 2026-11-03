@@ -26,6 +26,7 @@ public sealed partial class MainWindow : Window
     private readonly TextBox diagnostic = Ui.Box("카카오톡 상태는 아직 진단하지 않았습니다.", true);
     private readonly TabControl tabs = new() { TabStripPlacement = Dock.Left, Background = Brushes.White, BorderThickness = new Thickness(0) };
     private bool busy;
+    private Button roomDryRunButton = null!;
 
     public MainWindow(bool demoMode)
     {
@@ -95,13 +96,16 @@ public sealed partial class MainWindow : Window
     {
         diagnostic.IsReadOnly = true; diagnostic.MinHeight = 230;
         var diagnose = Ui.Button("카카오톡 읽기 전용 진단", () => Diagnose(), true);
+        roomDryRunButton = Ui.Button("방 열기 드라이런", () => { if (!demo) new RoomDryRunWindow { Owner = this }.ShowDialog(); });
+        roomDryRunButton.IsEnabled = !demo;
         return Ui.Scroll(Ui.Stack(Ui.Text("안전한 공지 발송 준비", 25), Ui.Text("학생 DB와 반을 준비한 뒤, 수업 결과를 입력하고 최종 문구를 검토하세요. 드라이런은 입력·전송 없이 대상만 확인합니다."), metrics,
             new Separator { Margin = new Thickness(0, 15, 0, 15) }, Ui.Text("데이터 보관", 19),
             Ui.Text(demo ? "현재 데모 데이터는 메모리에만 있습니다. 앱을 닫으면 초기화됩니다." : "데이터 위치: " + store!.Path),
             Ui.Actions(Ui.Button("기존 XLSX 전체 가져오기", () => Guard(ImportWholeWorkbook), true)),
             Ui.Text("기존 통합 문서의 학생 DB와 반별 수업 시트에서 학생과 반 명단을 함께 가져옵니다.", 12),
             Ui.Actions(Ui.Button("전체 JSON 백업", () => Guard(ExportBackup)), Ui.Button("JSON 복원", () => Guard(RestoreBackup))),
-            Ui.Text("카카오톡 연결 상태", 19), Ui.Text("카카오톡을 실행하고 발송할 채팅방을 열어 두세요. 같은 제목의 창이 여러 개이거나 입력창을 안전하게 식별하지 못하면 발송을 중단합니다."), Ui.Actions(diagnose), diagnostic));
+            Ui.Text("카카오톡 연결 상태", 19), Ui.Text("카카오톡을 실행하고 발송할 채팅방을 열어 두세요. 같은 제목의 창이 여러 개이거나 입력창을 안전하게 식별하지 못하면 발송을 중단합니다."),
+            Ui.Actions(diagnose, roomDryRunButton), diagnostic));
     }
     private async void Diagnose()
     {
@@ -160,6 +164,7 @@ public sealed partial class MainWindow : Window
     internal void VerifySmokeTest()
     {
         if (!demo || store != null || tabs.Items.Count != 6 || students.Count != 3) throw new InvalidOperationException("격리 데모 초기화 실패");
+        if (roomDryRunButton.IsEnabled) throw new InvalidOperationException("데모에서 실제 카카오톡 방 열기 경로가 활성화되었습니다.");
         lessonClass.SelectedIndex = 0; LoadLesson();
         if (rows.Count != 3) throw new InvalidOperationException("데모 수업 명단 실패");
         foreach (var row in rows) row.Message = row.Input.Nickname + " 학생의 데모 공지입니다.";

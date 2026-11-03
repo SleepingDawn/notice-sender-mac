@@ -1,9 +1,9 @@
 <Project>
   <PropertyGroup>
-    <Version>3.1.0</Version>
-    <AssemblyVersion>3.1.0.0</AssemblyVersion>
-    <FileVersion>3.1.0.73</FileVersion>
-    <InformationalVersion>3.1.0-windows</InformationalVersion>
+    <Version>3.1.1</Version>
+    <AssemblyVersion>3.1.1.0</AssemblyVersion>
+    <FileVersion>3.1.1.74</FileVersion>
+    <InformationalVersion>3.1.1-windows</InformationalVersion>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
 </Project>

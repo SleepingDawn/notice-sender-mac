@@ -2,6 +2,7 @@ using NoticeSender.Automation;
 using NoticeSender.Core;
 
 if (args.Any(a => a.StartsWith("--live-", StringComparison.Ordinal))) return await LiveSmoke.RunAsync(args);
+if (args.Contains("--hold-room-opening-lease")) return NativeRoomOpeningTests.HoldRoomOpeningLease();
 
 var tests = new (string, Func<Task>)[] {
     ("dry run resolves only, persists a log, and never enters text/files/Enter", DryRun),
@@ -28,7 +29,20 @@ var tests = new (string, Func<Task>)[] {
     ("native discovery includes top-level controls without a Window UIA role", NativeEnumerationTests.CustomTopLevel),
     ("interrupted dry run never creates a protected delivery log", InterruptedDryRun),
     ("composer focus precedes empty-draft check", ComposerFocus),
-    ("composer focus never clears an existing draft", ComposerDraft)
+    ("composer focus never clears an existing draft", ComposerDraft),
+    ("native room opening queries the owned search and queues Enter only to its visible result list", NativeRoomOpeningTests.OwnedUnnamedSearch)
+    ,("coordinator dry run uses the app opener without entering delivery", DryRunOpener)
+    ,("coordinator actual delivery retains strict resolution", ActualStrictResolver)
+    ,("native room search rejects a locked main window", NativeRoomOpeningTests.LockedMain)
+    ,("native room search rejects an inactive chat view", NativeRoomOpeningTests.InactiveChatView)
+    ,("native room search rejects duplicate search edits", NativeRoomOpeningTests.DuplicateEdits)
+    ,("native room search rejects changed view ownership before entry", NativeRoomOpeningTests.ChangedOwnership)
+    ,("native room search cancellation happens before any query or Enter", NativeRoomOpeningTests.CancelledSearch)
+    ,("native room search excludes windows from another process", NativeRoomOpeningTests.ForeignProcess)
+    ,("native room search rejects a query changed before Enter", NativeRoomOpeningTests.ChangedQuery)
+    ,("native room search can activate the owned hidden edit through its query notification", NativeRoomOpeningTests.HiddenSearch)
+    ,("room opening is serialized across processes before any desktop operation", NativeRoomOpeningTests.CrossProcessLease)
+    ,("native room search rejects a visible conflicting main view", NativeRoomOpeningTests.VisibleOtherView)
 };
 int failures = 0;
 foreach (var (name, test) in tests) { try { await test(); Console.WriteLine("PASS " + name); } catch (Exception e) { failures++; Console.WriteLine("FAIL " + name + ": " + e.Message); } }
@@ -42,6 +56,16 @@ static async Task DryRun() {
     await new SendCoordinator(fake).RunAsync(db, [item], true, _ => { }, () => saved++, default);
     Check(fake.Resolves == 1 && fake.Effects.Count == 0, "dry run caused a side effect or skipped resolution");
     Check(item.Status == "드라이런 확인 완료" && db.Logs.Count == 1 && saved >= 2, "dry run result not persisted");
+}
+static async Task DryRunOpener() {
+    var client = new OpeningClient(); var item = Item(); item.AttachmentPaths.Add("never-read-this.txt");
+    await new SendCoordinator(client).RunAsync(new(), [item], true, _ => { }, () => { }, default);
+    Check(item.Status == "드라이런 확인 완료" && client.Opened == 1 && client.Delivered == 0, "dry run failed to open and verify the room safely");
+}
+static async Task ActualStrictResolver() {
+    var client = new OpeningClient(); var item = Item();
+    await new SendCoordinator(client).RunAsync(new(), [item], false, _ => { }, () => { }, default);
+    Check(item.Status == "실패" && client.Opened == 0 && client.Delivered == 0, "native dry-run opener authorized actual delivery");
 }
 static async Task Success() {
     var fake = new FakeClient(); var db = new AppDatabase(); var item = Item(); var states = new List<string>();
@@ -175,4 +199,13 @@ sealed class FakeClient : IChatClient {
     public Task SendTextAsync(ChatTarget target, string text, CancellationToken ct) { Effects.Add("text:" + text); AfterText?.Invoke(); return Task.CompletedTask; }
     public Task SendFilesAsync(ChatTarget target, IReadOnlyList<string> paths, CancellationToken ct) { Effects.Add("files:" + string.Join("|", paths)); AfterFiles?.Invoke(); return Task.CompletedTask; }
     public Task CompleteAsync(ChatTarget target, CancellationToken ct) { Effects.Add("complete"); return Task.CompletedTask; }
+}
+
+sealed class OpeningClient : IChatClient, IDryRunChatClient {
+    public int Opened; public int Delivered;
+    public Task<RoomOpenDryRunResult> OpenRoomDryRunAsync(string room, CancellationToken ct) { Opened++; return Task.FromResult(new RoomOpenDryRunResult(room, false, new(42, 1, room, 2))); }
+    public Task<ChatTarget> ResolveAsync(string room, CancellationToken ct) => throw new InvalidOperationException("strict resolution rejected an inaccessible result list");
+    public Task SendTextAsync(ChatTarget target, string text, CancellationToken ct) { Delivered++; return Task.CompletedTask; }
+    public Task SendFilesAsync(ChatTarget target, IReadOnlyList<string> paths, CancellationToken ct) { Delivered++; return Task.CompletedTask; }
+    public Task CompleteAsync(ChatTarget target, CancellationToken ct) { Delivered++; return Task.CompletedTask; }
 }
