@@ -2,6 +2,12 @@
 
 Windows 10/11 x64용 네이티브 버전은 [`Windows/README.md`](Windows/README.md)를 참고하세요. Windows 소스·빌드·검증은 별도 폴더에서 관리합니다.
 
+프로젝트 원본 코드는 [MIT 라이선스](LICENSE)로 제공합니다. 포함된 제3자 코드의 저작권과 별도 라이선스는 유지됩니다. 데이터 처리 범위는 [Privacy policy](PRIVACY.md)를 참고하세요.
+
+## Code signing policy
+
+Windows용 무료 SignPath Foundation 심사 신청을 준비하고 있습니다. 아직 승인·서명된 Windows 배포본은 없습니다. 유지보수자와 서명 승인 절차는 [Code signing policy](CODE_SIGNING_POLICY.md)에 공개합니다.
+
 학생 DB와 Google Sheets의 수업 공지를 검증한 뒤 KakaoTalk Mac에서 정확한 방 제목을 확인하고 순차 발송하는 SwiftUI 앱입니다.
 
 2.0부터 KakaoTalk 접근성 탐색은 [`channprj/kmsg`](https://github.com/channprj/kmsg)의 소스를 앱 내부 라이브러리로 포함해 사용합니다. 업스트림 `1.260705.0`의 `fb70208286a1da3a404861dc944db470176155f6` 커밋에 고정했으며, 학생 공지 발송에 맞게 부분 일치와 강제 타이핑을 차단했습니다. 별도 보조 프로세스가 아니므로 손쉬운 사용 권한은 `공지발송.app` 하나에만 부여합니다. MIT 라이선스와 고정 커밋 정보는 앱 번들의 `Contents/Resources/ThirdPartyLicenses`에도 포함됩니다.

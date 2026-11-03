@@ -41,6 +41,9 @@ if ($Publish) {
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\README.md') -Destination (Join-Path $output 'Windows-Guide.md') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\TESTING.md') -Destination (Join-Path $output 'TESTING.md') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\SIGNING.md') -Destination (Join-Path $output 'SIGNING.md') -Force
+    Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination (Join-Path $output 'LICENSE.txt') -Force
+    Copy-Item -LiteralPath (Join-Path $repository 'PRIVACY.md') -Destination (Join-Path $output 'PRIVACY.md') -Force
+    Copy-Item -LiteralPath (Join-Path $repository 'CODE_SIGNING_POLICY.md') -Destination (Join-Path $output 'CODE_SIGNING_POLICY.md') -Force
     if (!$SkipTests) {
         $publishedSmoke = Start-Process -FilePath (Join-Path $output 'NoticeSender.exe') -ArgumentList '--smoke-test' -PassThru -WindowStyle Hidden
         if (!$publishedSmoke.WaitForExit(30000)) { $publishedSmoke.Kill(); throw '자체 포함 배포본 검사 시간 초과' }
