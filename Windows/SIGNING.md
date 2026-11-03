@@ -17,7 +17,7 @@ EXE만 서명하면 충분하지 않습니다. 이 네 파일을 모두 같은 �
 
 | 경로 | 현재 조건 | 다음 결정 |
 |---|---|---|
-| SignPath Foundation | 오픈소스 프로젝트 무료. OSI 라이선스, 유지보수·공개 릴리스·프로젝트 평판 심사, 담당자 MFA 및 서명 정책 필요. 발행자는 SignPath Foundation. 승인·소요 기간 보장 없음 | 소유자 승인으로 MIT 적용. 정책과 신청 정보를 준비했으며, 제공자 약관·개인정보 처리 동의 확인 후 제출 예정 |
+| SignPath Foundation | 오픈소스 프로젝트 무료. OSI 라이선스, 유지보수·공개 릴리스·프로젝트 평판 심사, 담당자 MFA 및 서명 정책 필요. 발행자는 SignPath Foundation. 승인·소요 기간 보장 없음 | 소유자 승인으로 MIT 적용. 제공자 필수 동의를 승인받아 2026-11-04 신청 제출, 양식의 Form submitted 확인. 제공자 심사 대기 |
 | Certum 개인용 Standard cloud | 공식 페이지 표시 가격 €209부터. 개인 신원·주소 확인, SimplySign 모바일/PC 앱 필요. 선택 기간·세금·실제 결제액 및 한국 서류 수용 여부는 결제 전 확인 필요 | 유료 가입·신원 확인을 할지 결정. 개인정보는 제공자 보안 페이지에 사용자가 직접 제출 |
 | Microsoft Artifact Signing | 현재 공개 신뢰 개인은 미국·캐나다만 지원. 한국은 조직 경로에 포함되나 개인 SNU 이메일만으로 조직 자격을 대신할 수 없음 | 실제 발행 권한을 가진 조직이 참여할 때 별도 검토 |
 
@@ -57,4 +57,4 @@ Certum 오픈소스 상품도 €49부터 표시되지만 현재 페이지에는
 7. 이 PC에서 **정상 경로의 서명된 앱**을 실행해 SAC와 진단을 확인합니다. 차단되면 해당 서명·정책 이벤트를 확인하고 제공자 경로로 해결합니다.
 8. 앱 자체 드라이런 후 사용자가 허용한 봇에서만 텍스트·TXT/CSV·단일/다중 첨부·첨부 단독·PDF·PNG·중단·보호된 재시도를 재개합니다. 불명확한 전송은 자동 반복하지 않습니다.
 
-연결 기준: [SignPath GitHub origin 검증·action](https://docs.signpath.io/trusted-build-systems/github), [artifact 구성 예제](https://docs.signpath.io/artifact-configuration/examples). 이 문서는 신청 준비이며 서비스 가입, 서명 또는 실제 발송 완료 보고가 아닙니다.
+연결 기준: [SignPath GitHub origin 검증·action](https://docs.signpath.io/trusted-build-systems/github), [artifact 구성 예제](https://docs.signpath.io/artifact-configuration/examples). 이 문서는 서명 준비·신청 접수 기록이며 서비스 승인, 서명 또는 실제 발송 완료 보고가 아닙니다.

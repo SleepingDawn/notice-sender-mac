@@ -2,7 +2,7 @@
 
 ## Current status
 
-The maintainer authorized an application to SignPath Foundation on 2026-11-04. **The application is pending preparation/submission; SignPath has not accepted the project, and no Windows binary is currently signed by SignPath Foundation.** Windows live text/file delivery tests remain incomplete.
+The maintainer authorized an application to SignPath Foundation on 2026-11-04. **The application was submitted on 2026-11-04 and the form confirmed receipt. Provider review is pending; SignPath has not accepted the project, and no Windows binary is currently signed by SignPath Foundation.** Windows live text/file delivery tests remain incomplete.
 
 If the project is accepted, the required attribution will be: “Free code signing provided by SignPath.io, certificate by SignPath Foundation”. This describes the intended service after approval, not an existing signature or endorsement.
 

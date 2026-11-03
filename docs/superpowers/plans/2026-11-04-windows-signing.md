@@ -30,7 +30,7 @@
 - [x] Add a provider guide with verified official sources, blockers and exact next steps; link from README.
 - [x] Run script tests in normal Windows CI, compile locally without product execution, review diff, commit and push to the existing feature branch.
 - [x] Obtain the user's license/provider decision. The user confirmed ownership and authorized MIT plus a free SignPath application; supplied account name Seyong Im and the approved SNU email.
-- [ ] Publish owner-approved license/policies on the feature branch, obtain required provider-specific agreement/data-processing consent, submit application and verify the response. Provider acceptance and live delivery remain pending.
+- [x] Publish owner-approved license/policies on the feature branch, obtain required provider-specific agreement/data-processing consent, submit application and verify the response. Provider acceptance and live delivery remain pending.
 
 ## Evidence and decisions
 
@@ -42,3 +42,6 @@
 - Ruling: keep provider integration as an XML draft and documented steps until license/provider authorization. No fake service credentials or automatic signing workflow was installed.
 - GitHub Windows CI for `fb529deb84e5ac16474a91fe337f734cdab5dff0`: [run 41666095451](https://github.com/SleepingDawn/notice-sender-mac/actions/runs/41666095451), completed success. Includes the signature-audit tests and full existing product build/tests/smokes.
 - After MIT/application authorization, added a project LICENSE independently and preserved all third-party notices. The automatic approval reviewer rejected the initial proposal to generate it by replacing the copyright line in a third-party LICENSE; that command did not execute and was not retried. The separate project license does not reattribute vendor code.
+- GitHub Windows CI for the owner-approved license/policy build `dafbd43fcf17c8193f5dc479a6cd48dcc618289c`: [run 41667318489](https://github.com/SleepingDawn/notice-sender-mac/actions/runs/41667318489), completed success with all steps successful.
+- The user explicitly approved both required provider consent checkboxes and final submission, and separately authorized the CAPTCHA verification if needed. The next observed page already displayed **Form submitted / Thank you, we'll be in touch soon**; no image-challenge solution was entered by the agent. Optional marketing consent remained unchecked.
+- Receipt screenshot and private metadata are in ignored `outputs/`. SignPath acceptance, signing credentials and signed binaries are not yet available. Actual bot-only delivery tests cannot resume until trusted signing succeeds.
