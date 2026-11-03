@@ -22,3 +22,11 @@ database-*.json
 # Xcode/Swift user state
 *.xcuserstate
 xcuserdata/
+
+# Windows build output and local tools
+**/bin/
+**/obj/
+Windows/artifacts/
+Windows/.vs/
+.tools/
+**/.local/
