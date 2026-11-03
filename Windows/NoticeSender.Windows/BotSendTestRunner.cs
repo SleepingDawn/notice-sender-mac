@@ -120,7 +120,7 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
                 {
                     await coordinator.RunAsync(database, new[] { batch }, false, Progress, Save, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (batch.Status != "전송 요청 완료") throw new InvalidOperationException(database.Logs.LastOrDefault()?.Detail ?? "전송 요청을 완료하지 못했습니다: " + batch.Status);
+                    if (batch.Status != "전송 요청 완료") throw new InvalidOperationException(report.Trace.LastOrDefault(t => t.Phase == "failed")?.Error ?? database.Logs.LastOrDefault()?.Detail ?? "전송 요청을 완료하지 못했습니다: " + batch.Status);
                 }
                 else
                 {
@@ -158,9 +158,9 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
         }
         catch (Exception ex)
         {
-            report.Failure = ex.Message;
-            if (active != null) { active.Status = "failed"; active.Error = ex.Message; }
-            else { report.Preparation.Status = "failed"; report.Preparation.Error = ex.Message; }
+            report.Failure = WindowsTrustFailure.Describe(ex);
+            if (active != null) { active.Status = "failed"; active.Error = report.Failure; }
+            else { report.Preparation.Status = "failed"; report.Preparation.Error = report.Failure; }
         }
         report.Completed = true;
         report.FinishedAt = DateTimeOffset.Now;
@@ -267,7 +267,7 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
             catch (Exception ex)
             {
                 if (!failureCaptured) { failureCaptured = true; CaptureEvidence(Step + "-" + operation + "-failed"); }
-                report.Trace.Add(new(DateTimeOffset.Now, Step, operation, "failed", Error: ex.Message)); save(); throw;
+                report.Trace.Add(new(DateTimeOffset.Now, Step, operation, "failed", Error: WindowsTrustFailure.Describe(ex))); save(); throw;
             }
         }
         internal Task<RoomOpenDryRunResult> OpenAsync(string room, CancellationToken ct) => Call("open-room", async () =>

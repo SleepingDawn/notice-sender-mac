@@ -85,7 +85,7 @@ public sealed class RoomDryRunWindow : Window
             }, cancellation.Token);
             exitCode = report.ExitCode;
         }
-        catch (Exception ex) { status.Text = "드라이런을 완료하지 못했습니다: " + ex.Message; }
+        catch (Exception ex) { status.Text = "드라이런을 완료하지 못했습니다: " + WindowsTrustFailure.Describe(ex); }
         finally
         {
             running = false; roomsBox.IsReadOnly = false; start.IsEnabled = true; cancel.IsEnabled = false;

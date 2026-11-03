@@ -71,7 +71,7 @@ public sealed partial class MainWindow : Window
     private void Guard(Action action)
     {
         try { action(); }
-        catch (Exception ex) { Notice("작업을 완료하지 못했습니다."); MessageBox.Show(this, ex.Message, "확인해 주세요", MessageBoxButton.OK, MessageBoxImage.Warning); }
+        catch (Exception ex) { Notice("작업을 완료하지 못했습니다."); MessageBox.Show(this, WindowsTrustFailure.Describe(ex), "확인해 주세요", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
     private void CommitTables()
     {
@@ -96,7 +96,7 @@ public sealed partial class MainWindow : Window
     {
         diagnostic.IsReadOnly = true; diagnostic.MinHeight = 230;
         var diagnose = Ui.Button("카카오톡 읽기 전용 진단", () => Diagnose(), true);
-        roomDryRunButton = Ui.Button("방 열기 드라이런", () => { if (!demo) new RoomDryRunWindow { Owner = this }.ShowDialog(); });
+        roomDryRunButton = Ui.Button("방 열기 드라이런", () => { if (!demo) Guard(() => new RoomDryRunWindow { Owner = this }.ShowDialog()); });
         roomDryRunButton.IsEnabled = !demo;
         return Ui.Scroll(Ui.Stack(Ui.Text("안전한 공지 발송 준비", 25), Ui.Text("학생 DB와 반을 준비한 뒤, 수업 결과를 입력하고 최종 문구를 검토하세요. 드라이런은 입력·전송 없이 대상만 확인합니다."), metrics,
             new Separator { Margin = new Thickness(0, 15, 0, 15) }, Ui.Text("데이터 보관", 19),
@@ -105,13 +105,14 @@ public sealed partial class MainWindow : Window
             Ui.Text("기존 통합 문서의 학생 DB와 반별 수업 시트에서 학생과 반 명단을 함께 가져옵니다.", 12),
             Ui.Actions(Ui.Button("전체 JSON 백업", () => Guard(ExportBackup)), Ui.Button("JSON 복원", () => Guard(RestoreBackup))),
             Ui.Text("카카오톡 연결 상태", 19), Ui.Text("카카오톡을 실행하고 발송할 채팅방을 열어 두세요. 같은 제목의 창이 여러 개이거나 입력창을 안전하게 식별하지 못하면 발송을 중단합니다."),
+            Ui.Text(WindowsTrustFailure.PermissionNote, 12), Ui.Text(WindowsTrustFailure.StartupLimitNote, 12),
             Ui.Actions(diagnose, roomDryRunButton), diagnostic));
     }
     private async void Diagnose()
     {
         diagnostic.Text = "읽기 전용 진단 중…";
-        try { diagnostic.Text = demo ? "데모 모드입니다. 카카오톡에 접근하거나 실제 메시지를 발송하지 않습니다." : await new NoticeSender.Automation.WindowsKakaoClient().DiagnoseAsync(System.Threading.CancellationToken.None); }
-        catch (Exception ex) { diagnostic.Text = "진단 실패: " + ex.Message; }
+        try { diagnostic.Text = demo ? "데모 모드입니다. 카카오톡에 접근하거나 실제 메시지를 발송하지 않습니다." : await NativeKakaoDiagnostics.RunAsync(System.Threading.CancellationToken.None); }
+        catch (Exception ex) { diagnostic.Text = "진단 실패: " + WindowsTrustFailure.Describe(ex); }
     }
     private void ExportBackup()
     {

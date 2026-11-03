@@ -1,11 +1,11 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Windows;
-using NoticeSender.Automation;
 
 namespace NoticeSender.Windows;
 
@@ -26,18 +26,7 @@ internal static class Program
         if (args.Contains("--dry-run-rooms")) return RunRoomDryRun(args);
         bool smoke = args.Contains("--smoke-test");
         bool demo = smoke || args.Contains("--demo");
-        if (args.Contains("--diagnose-kakao"))
-        {
-            try
-            {
-                var diagnostic = new WindowsKakaoClient().DiagnoseAsync(CancellationToken.None).GetAwaiter().GetResult();
-                string path = Path.Combine(Path.GetTempPath(), "NoticeSender-kakao-diagnostics.txt");
-                File.WriteAllText(path, diagnostic, Encoding.UTF8);
-                if (!smoke) MessageBox.Show(diagnostic + "\n\n저장 위치: " + path, "카카오톡 읽기 전용 진단");
-                return 0;
-            }
-            catch (Exception ex) { if (!smoke) MessageBox.Show(ex.Message, "진단 실패"); return 1; }
-        }
+        if (args.Contains("--diagnose-kakao")) return RunKakaoDiagnosis(smoke);
         if (smoke) File.Delete(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-error.txt"));
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         Ui.InstallStyles(app);
@@ -55,7 +44,7 @@ internal static class Program
             {
                 window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(new Action(async () =>
                 {
-                    try { window.VerifySmokeTest(); await RoomDryRunSmokeTests.RunAsync(); await BotSendTestSmokeTests.RunAsync(); app.Shutdown(0); }
+                    try { WindowsTrustFailureSmokeTests.Run(); window.VerifySmokeTest(); await RoomDryRunSmokeTests.RunAsync(); await BotSendTestSmokeTests.RunAsync(); app.Shutdown(0); }
                     catch (Exception ex) { File.WriteAllText(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-error.txt"), ex.ToString()); app.Shutdown(2); }
                 }));
             }
@@ -63,24 +52,68 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            if (!smoke) MessageBox.Show("데이터를 열지 못했습니다. 기존 파일은 교체하지 않았습니다.\n\n" + ex.Message, "공지발송 시작 실패");
+            if (!smoke) MessageBox.Show(WindowsTrustFailure.Classify(ex)?.Message ?? "데이터를 열지 못했습니다. 기존 파일은 교체하지 않았습니다.\n\n" + ex.Message, "공지발송 시작 실패");
             return 1;
         }
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int RunKakaoDiagnosis(bool smoke)
+    {
+        try
+        {
+            string diagnostic = NativeKakaoDiagnostics.RunAsync(CancellationToken.None).GetAwaiter().GetResult();
+            string path = Path.Combine(Path.GetTempPath(), "NoticeSender-kakao-diagnostics.txt");
+            File.WriteAllText(path, diagnostic, Encoding.UTF8);
+            if (!smoke) MessageBox.Show(diagnostic + "\n\n저장 위치: " + path, "카카오톡 읽기 전용 진단");
+            return 0;
+        }
+        catch (Exception ex) { if (!smoke) MessageBox.Show(WindowsTrustFailure.Describe(ex), "진단 실패"); return 1; }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int RunBotSendTest(string[] args)
     {
         try
         {
             var options = BotSendTestOptions.Parse(args);
-            var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-            Ui.InstallStyles(app);
-            // This mode never constructs the main window, database store, or real database mutex.
-            return app.Run(new BotSendTestWindow(options.Room, options.ReportPath, acknowledgeBotOnly: true, autoStart: true, exitAfterTest: options.ExitAfterTest, captureEvidence: options.CaptureEvidence));
+            return RunBotSendTestWindow(options);
         }
-        catch (Exception) { return 1; } // Command-line test failures must not block on an error dialog.
+        catch (Exception ex) { WriteBotStartupFailureReport(args, ex); return 1; }
     }
 
+    // Keep optional Automation-typed window construction outside the caller's catch/JIT boundary.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int RunBotSendTestWindow(BotSendTestOptions options)
+    {
+        var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+        Ui.InstallStyles(app);
+        return app.Run(new BotSendTestWindow(options.Room, options.ReportPath, acknowledgeBotOnly: true, autoStart: true, exitAfterTest: options.ExitAfterTest, captureEvidence: options.CaptureEvidence));
+    }
+
+    internal static void WriteBotStartupFailureReport(string[] args, Exception exception)
+    {
+        try
+        {
+            int index = Array.IndexOf(args, "--report");
+            if (index < 0 || index + 1 >= args.Length || args.Count(a => a == "--report") != 1 || args[index + 1].StartsWith("--", StringComparison.Ordinal)) return;
+            string path = Path.GetFullPath(args[index + 1]);
+            var failure = WindowsTrustFailure.Classify(exception);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            string Sidecar() => path + ".unhandled-failure-" + Guid.NewGuid().ToString("N") + ".json";
+            // app.Run may escape after delivery has started: never replace its trace, logs, evidence, or another existing file.
+            string output = File.Exists(path) ? Sidecar() : path;
+            string temporary = output + ".tmp-" + Guid.NewGuid().ToString("N");
+            File.WriteAllText(temporary, JsonSerializer.Serialize(new { mode = "bot-send-test", completed = true, success = false, cancelled = false, exitCode = 1,
+                failure = WindowsTrustFailure.Describe(exception), failureKind = failure?.Kind.ToString(), errorCode = failure?.ErrorCode, helpUrl = failure?.HelpUrl,
+                originalReportPath = path }, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+            try { File.Move(temporary, output, overwrite: false); }
+            catch (IOException) when (File.Exists(output)) { File.Move(temporary, Sidecar(), overwrite: false); }
+        }
+        catch (Exception) { } // Startup failures must not block on a dialog or replace their original exit result.
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int RunRoomDryRun(string[] args)
     {
         try
@@ -100,17 +133,23 @@ internal static class Program
             using var json = JsonDocument.Parse(File.ReadAllText(Value("--dry-run-rooms", true)!));
             if (json.RootElement.ValueKind != JsonValueKind.Array || json.RootElement.EnumerateArray().Any(e => e.ValueKind != JsonValueKind.String))
                 throw new ArgumentException("채팅방 목록 파일은 정확한 방 이름으로 이루어진 JSON 배열이어야 합니다.");
-            var rooms = RoomDryRunRunner.ValidateRooms(json.RootElement.EnumerateArray().Select(e => e.GetString()!));
+            var rooms = json.RootElement.EnumerateArray().Select(e => e.GetString()!).ToArray();
             string? reportPath = Value("--report", false);
-            var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-            Ui.InstallStyles(app);
-            // This path intentionally constructs no main window, store, or database mutex.
-            return app.Run(new RoomDryRunWindow(rooms, reportPath, autoStart: true, exitAfterFinish: args.Contains("--exit-after-dry-run")));
+            return RunRoomDryRunWindow(rooms, reportPath, args.Contains("--exit-after-dry-run"));
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "방 열기 드라이런 시작 실패");
+            MessageBox.Show(WindowsTrustFailure.Describe(ex), "방 열기 드라이런 시작 실패");
             return 1;
         }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int RunRoomDryRunWindow(string[] rooms, string? reportPath, bool exitAfterFinish)
+    {
+        RoomDryRunRunner.ValidateRooms(rooms);
+        var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+        Ui.InstallStyles(app);
+        return app.Run(new RoomDryRunWindow(rooms, reportPath, autoStart: true, exitAfterFinish: exitAfterFinish));
     }
 }

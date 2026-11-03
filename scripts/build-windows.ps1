@@ -40,7 +40,13 @@ if ($Publish) {
     Invoke-DotNet publish $appProject --configuration Release --runtime win-x64 --self-contained true '-p:PublishSingleFile=false' --output $output
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\README.md') -Destination (Join-Path $output 'Windows-Guide.md') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\TESTING.md') -Destination (Join-Path $output 'TESTING.md') -Force
-    $archive = Join-Path $repository 'dist\NoticeSender-3.1.1-Windows-x64.zip'
+    if (!$SkipTests) {
+        $publishedSmoke = Start-Process -FilePath (Join-Path $output 'NoticeSender.exe') -ArgumentList '--smoke-test' -PassThru -WindowStyle Hidden
+        if (!$publishedSmoke.WaitForExit(30000)) { $publishedSmoke.Kill(); throw '자체 포함 배포본 검사 시간 초과' }
+        if ($publishedSmoke.ExitCode -ne 0) { throw "자체 포함 배포본 검사 실패: $($publishedSmoke.ExitCode)" }
+        Write-Output '자체 포함 배포본 격리 스모크 검사 통과'
+    }
+    $archive = Join-Path $repository 'dist\NoticeSender-3.1.2-preview.1-Windows-x64.zip'
     Compress-Archive -LiteralPath $output -DestinationPath $archive -Force
     Write-Output "배포 파일: $archive"
 }

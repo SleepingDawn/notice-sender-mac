@@ -110,7 +110,7 @@ internal sealed class RoomDryRunRunner(IDryRunChatClient client)
         {
             if (active == null) throw;
             active.Status = "failed";
-            active.Error = ex.Message;
+            active.Error = WindowsTrustFailure.Describe(ex);
         }
         report.Completed = true;
         report.FinishedAt = DateTimeOffset.Now;

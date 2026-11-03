@@ -89,7 +89,7 @@ public sealed class BotSendTestWindow : Window
             }, cancellation.Token);
             exitCode = report.ExitCode;
         }
-        catch (Exception ex) { status.Text = "테스트를 완료하지 못했습니다: " + ex.Message; }
+        catch (Exception ex) { status.Text = "테스트를 완료하지 못했습니다: " + WindowsTrustFailure.Describe(ex); }
         finally { running = false; cancel.IsEnabled = false; cancellation.Dispose(); cancellation = null; }
         if (exitAfterTest) Application.Current.Shutdown(exitCode);
         else if (closeRequested) Close();
