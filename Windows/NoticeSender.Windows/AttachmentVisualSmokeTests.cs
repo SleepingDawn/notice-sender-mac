@@ -119,6 +119,9 @@ internal static class AttachmentVisualSmokeTests
         byte[] originalFrame = File.ReadAllBytes(Path.Combine(fixtures, "self26-PNG-transcript.png"));
         Require(originalSource.SequenceEqual(SyntheticBotImage.Create(original)), "Actual self PNG source differs from shared generator.");
         Require(recognizer.CountSyntheticImageReceipts(originalFrame, originalSource, original, CancellationToken.None) == 1, "Actual self PNG receipt missing.\n" + string.Join("\n", recognizer.LastDiagnostics));
+        byte[] self27Source = File.ReadAllBytes(Path.Combine(fixtures, "self27-PNG-source.png"));
+        byte[] self27Frame = File.ReadAllBytes(Path.Combine(fixtures, "self27-PNG-transcript.png"));
+        Require(recognizer.CountSyntheticImageReceipts(self27Frame, self27Source, "20261104-100703-936-f86b0551", CancellationToken.None) == 1, "Actual self PNG blocked by earlier PDF icon.\n" + string.Join("\n", recognizer.LastDiagnostics));
         foreach (string wrong in new[] { "20261104-095425-392-d37d252e", "20261104-095425-392-d37d212b" })
             Require(recognizer.CountSyntheticImageReceipts(originalFrame, SyntheticBotImage.Create(wrong), wrong, CancellationToken.None) == 0, "Wrong valid grid stamp accepted.");
         byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(original));

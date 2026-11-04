@@ -257,18 +257,14 @@ internal sealed class AttachmentVisualRecognizer
         using var captureStream = new MemoryStream(exactTranscriptPng, false);
         using var captureBitmap = new Bitmap(captureStream);
         var capture = Raster.FromBitmap(captureBitmap);
-        // This synthetic payload contains no red content. Reject possible failed-send markers
-        // anywhere in the exact transcript, including outside the otherwise unchanged image.
+        // Collect red shapes once, then scope them to each candidate image and its status gutter.
+        // Older PDF icons elsewhere in the transcript do not describe this image's send status.
         bool RedStatus(int color)
         {
             int red = color >> 16 & 255, green = color >> 8 & 255, blue = color & 255;
             return red >= 150 && green <= 110 && blue <= 110 && red - Math.Max(green, blue) >= 80 && Math.Abs(green - blue) <= 25;
         }
-        if (Components(capture, RedStatus, token).Any(region => region.Count >= 3))
-        {
-            LastDiagnostics.Add("Potential red failed-send status in exact transcript.");
-            return 0;
-        }
+        var redStatuses = Components(capture, RedStatus, token).Where(region => region.Count >= 3).ToArray();
         int count = 0;
         foreach (var region in Components(capture, Background, token).Where(region => region.Count >= 100 && region.Bounds.Width * region.Bounds.Height >= 500))
         {
@@ -278,6 +274,13 @@ internal sealed class AttachmentVisualRecognizer
             int x = bounds.Left - (int)Math.Round(sourceRegion.Left * scale), y = bounds.Bottom - (int)Math.Round(sourceRegion.Bottom * scale);
             int width = (int)Math.Round(source.Width * scale), height = (int)Math.Round(source.Height * scale);
             if (width < 100 || height < 50 || x < 0 || y < 0 || x + width > capture.Width || y + height > capture.Height) continue;
+            int gutter = Math.Max(16, width / 4), verticalMargin = Math.Max(4, height / 12);
+            var statusRegion = Rectangle.FromLTRB(Math.Max(0, x - gutter), Math.Max(0, y - verticalMargin), Math.Min(capture.Width, x + width + gutter), Math.Min(capture.Height, y + height + verticalMargin));
+            if (redStatuses.Any(status => statusRegion.IntersectsWith(status.Bounds)))
+            {
+                LastDiagnostics.Add("Potential red failed-send status adjacent to candidate image.");
+                continue;
+            }
             var patch = capture.Crop(new Rectangle(x, y, width, height));
             var reference = ResizeBicubic(source, width, height);
             long absoluteError = 0; int uniform = 0, uniformBad = 0, gridMaxError = 0;
