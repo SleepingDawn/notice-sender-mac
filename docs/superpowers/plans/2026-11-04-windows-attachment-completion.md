@@ -47,9 +47,9 @@ Files: `WindowsKakaoClient.cs`, native confirmation policy and receipt provider 
 
 ## Task 4: Delivery and audit
 
-- [ ] Review final source changes and run appropriate Core/Automation/WPF and published-artifact checks.
-- [ ] Save only private test evidence outside Git; update coverage and remaining limitations truthfully.
-- [ ] Update Windows preview version/build, keep host signing status explicit, commit on the requested branch and provide the tested artifact.
+- [x] Review final source changes and run appropriate Core/Automation/WPF and published-artifact checks.
+- [x] Save only private test evidence outside Git; update coverage and remaining limitations truthfully.
+- [x] Update Windows preview version/build, keep host signing status explicit, commit on the requested branch and provide the tested artifact.
 
 ## Review focus
 
@@ -58,3 +58,12 @@ Files: `WindowsKakaoClient.cs`, native confirmation policy and receipt provider 
 - A modal preview, pending image thumbnail or upload-error card must not count as a completed transcript attachment.
 - Multiple recipients and files must retain original order, exactly-once attempt consumption and persistent uncertainty across restarts.
 - A stalled capture/provider or user cancellation must settle without any later worker dispatching input.
+
+## Final execution record
+
+- Final source: `877c869`; version `3.1.2-preview.2`, file version `3.1.2.78`.
+- App-only self-chat dry run newly opened the exact requested room without sending.
+- The installed ZIP's app passed all seven real self-chat cases in `self-app-send-28-full.json` at 2026-11-04 10:12:24 KST; separate Korean-file case 29 passed at 10:13:34 KST.
+- Existing failures 24–27 remain in private evidence. No previous uncertain item was automatically retried.
+- General attachment completion uses explicit, durable user confirmation when no reliable automatic receipt is available; unattended synthetic tests cannot count that as automatic completion.
+- Host Smart App Control stays enabled. This is an unsigned VM-tested development build; trusted signing remains separate.
