@@ -2,9 +2,9 @@ name: Windows build and tests
 on:
   push:
     branches: [main, 'codex/**']
-    paths: ['Windows/**', 'scripts/build-windows.ps1', 'scripts/test-windows-signatures.ps1', 'scripts/tests/**', '.github/workflows/windows.yml']
+    paths: ['Windows/**', 'scripts/build-windows.ps1', 'scripts/copy-windows-ocr-runtime.ps1', 'scripts/test-windows-signatures.ps1', 'scripts/tests/**', '.github/workflows/windows.yml']
   pull_request:
-    paths: ['Windows/**', 'scripts/build-windows.ps1', 'scripts/test-windows-signatures.ps1', 'scripts/tests/**', '.github/workflows/windows.yml']
+    paths: ['Windows/**', 'scripts/build-windows.ps1', 'scripts/copy-windows-ocr-runtime.ps1', 'scripts/test-windows-signatures.ps1', 'scripts/tests/**', '.github/workflows/windows.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,11 +22,14 @@ jobs:
       - name: Build, self-test, smoke-test and publish
         shell: pwsh
         run: ./scripts/build-windows.ps1 -Publish
+      - name: Test OCR packaging with inert local fixtures
+        shell: pwsh
+        run: ./scripts/tests/windows-ocr-runtime.tests.ps1
       - name: Inventory unsigned development release (does not approve execution)
         shell: pwsh
         run: ./scripts/test-windows-signatures.ps1 -ReportPath outputs/windows-signatures.json
       - uses: actions/upload-artifact@v4
         with:
           name: NoticeSender-Windows-x64
-          path: dist/NoticeSender-3.1.2-preview.1-Windows-x64.zip
+          path: dist/NoticeSender-*-Windows-x64.zip
           if-no-files-found: error

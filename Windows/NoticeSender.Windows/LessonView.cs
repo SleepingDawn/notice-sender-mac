@@ -71,7 +71,7 @@ public sealed partial class MainWindow
         selectedMessageEditor.GotKeyboardFocus += (_, _) => PushUndo();
         lessonGrid.SelectionChanged += (_, _) => UpdateSelectedMessage();
         resultGrid.Height = 200; resultGrid.IsReadOnly = true;
-        Ui.Col(resultGrid, "학생", "StudentName", 150, true); Ui.Col(resultGrid, "채팅방", "ChatRoomName", 210, true); Ui.Col(resultGrid, "진행 상태", "Status", 180, true); Ui.Col(resultGrid, "개별 문구", "Message", 450, true);
+        Ui.Col(resultGrid, "학생", "StudentName", 150, true); Ui.Col(resultGrid, "채팅방", "ChatRoomName", 210, true); Ui.Col(resultGrid, "진행 상태", "Status", 180, true); Ui.Col(resultGrid, "완료 확인", "AttachmentCompletionDisplay", 115, true); Ui.Col(resultGrid, "개별 문구", "Message", 450, true);
         folderBox.Text = database.AttachmentRootPath ?? "";
         folderBox.MinWidth = 530;
         var folderActions = Ui.Actions(Ui.Button("첨부 폴더 선택", () => Guard(() => {
@@ -245,27 +245,54 @@ public sealed partial class MainWindow
             preparedIdentityHistory[content] = preparedId;
             row.PreparedId = preparedId; row.PreparedContent = content; item.Id = preparedId;
             var previous = database.Logs.Where(l => l.BatchId == item.Id).ToList();
-            item.Status = previous.LastOrDefault(l => l.Result is "전송 요청 완료" or "확인 필요" or "전송 중")?.Result ?? previous.LastOrDefault()?.Result ?? "준비";
+            var previousLog = previous.LastOrDefault(l => l.Result is "전송 요청 완료" or "확인 필요" or "전송 중") ?? previous.LastOrDefault();
+            item.Status = previousLog?.Result ?? "준비";
+            item.AttachmentCompletionKind = previousLog?.AttachmentCompletionKind;
+            item.AttachmentCompletionConfirmedAt = previousLog?.AttachmentCompletionConfirmedAt;
+            item.AttachmentCompletionAuditReference = previousLog?.AttachmentCompletionAuditReference;
+            item.AttachmentCompletionBatchId = previousLog?.AttachmentCompletionBatchId;
+            item.AttachmentCompletionAttemptId = previousLog?.AttachmentCompletionAttemptId;
             batch.Add(item);
         }
         return Clone(batch);
     }
-    private void Review(bool dryRun, bool execute)
+    private async void Review(bool dryRun, bool execute)
     {
-        if (busy) throw new InvalidOperationException("진행 중인 작업이 있습니다.");
-        if (demo && !dryRun && execute) throw new InvalidOperationException("데모 모드에서는 실제 발송이 차단됩니다. 드라이런은 데모 연결 확인으로 실행할 수 있습니다.");
-        SaveDatabase();
-        var snapshot = BuildSnapshot(dryRun);
-        var validation = BatchValidator.Validate(database, snapshot, dryRun);
-        if (validation.Count > 0) throw new InvalidOperationException(string.Join("\n", validation));
-        // The modal owns a detached snapshot. No prior preview is ever considered approval.
-        var review = new ReviewWindow(snapshot, dryRun, execute, demo) { Owner = this };
-        if (review.ShowDialog() == true && execute) RunBatch(snapshot, dryRun);
+        if (busy) { Notice("진행 중인 작업이 있습니다."); return; }
+        bool approved = false;
+        List<BatchItem>? snapshot = null;
+        ReviewedAttachmentBatch? reviewed = null;
+        try
+        {
+            if (demo && !dryRun && execute) throw new InvalidOperationException("데모 모드에서는 실제 발송이 차단됩니다. 드라이런은 데모 연결 확인으로 실행할 수 있습니다.");
+            SaveDatabase(); snapshot = BuildSnapshot(dryRun);
+            var validation = BatchValidator.Validate(database, snapshot, dryRun);
+            if (validation.Count > 0) throw new InvalidOperationException(string.Join("\n", validation));
+            busy = true; sendCancellation = new CancellationTokenSource(); SetBatchInputs(false);
+            if (!dryRun && snapshot.Any(item => item.AttachmentPaths.Count > 0))
+            {
+                sendProgress.Text = "최종 검토에 표시할 첨부파일을 확인하는 중…";
+                reviewed = await Task.Run(() => ReviewedAttachmentBatch.Capture(snapshot), sendCancellation.Token);
+                sendCancellation.Token.ThrowIfCancellationRequested();
+            }
+            // The modal owns a detached snapshot and exact file manifest. Previous approval is never reused.
+            var review = new ReviewWindow(snapshot, dryRun, execute, demo, reviewed) { Owner = this };
+            approved = review.ShowDialog() == true && execute;
+        }
+        catch (OperationCanceledException) { Notice("첨부 검토를 중지했습니다. 발송하지 않았습니다."); }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "발송 검토 중단", MessageBoxButton.OK, MessageBoxImage.Warning); }
+        finally { busy = false; sendCancellation?.Dispose(); sendCancellation = null; SetBatchInputs(true); }
+        if (approved && snapshot != null) RunBatch(snapshot, dryRun, reviewed);
     }
-    private async void RunBatch(List<BatchItem> snapshot, bool dryRun)
+    private void SetBatchInputs(bool enabled)
     {
-        SaveCurrentDraft();
-        if (!demo) store!.Save(database);
+        foreach (TabItem tab in tabs.Items) if (tab != tabs.SelectedItem) tab.IsEnabled = enabled;
+        if (lessonInputPanel != null) lessonInputPanel.IsEnabled = enabled;
+    }
+    private async void RunBatch(List<BatchItem> snapshot, bool dryRun, ReviewedAttachmentBatch? reviewed)
+    {
+        try { SaveCurrentDraft(); if (!demo) store!.Save(database); }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "발송 준비 중단", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
         busy = true; sendCancellation = new CancellationTokenSource();
         // Keep the stop button responsive while all editable inputs are locked.
         foreach (TabItem tab in tabs.Items) if (tab != tabs.SelectedItem) tab.IsEnabled = false;
@@ -275,9 +302,15 @@ public sealed partial class MainWindow
         Notice("진행 중에는 입력을 수정할 수 없습니다. ‘즉시 중지’로 중단할 수 있습니다.");
         try
         {
-            IChatClient client = demo ? new DemoClient() : new WindowsKakaoClient();
-            var coordinator = new SendCoordinator(client);
-            await coordinator.RunAsync(database, snapshot, dryRun, item => Dispatcher.Invoke(() => {
+            string[]? reviewedStandardCueRooms = dryRun ? null : snapshot.Select(item => item.ChatRoomName).ToArray();
+            await ReviewedBatchExecution.RunAsync(database, snapshot, dryRun, reviewed, approved =>
+            {
+                if (demo) return new DemoClient();
+                if (approved == null) return new OpeningVerifiedChatClient(new WindowsKakaoClient(reviewedStandardCueRooms: reviewedStandardCueRooms));
+                string evidenceFolder = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NoticeSender", "AttachmentEvidence");
+                var evidence = new ReviewedFileConfirmationEvidence(evidenceFolder, approved);
+                return new OpeningVerifiedChatClient(new WindowsKakaoClient(nativeFileConfirmation: new ReviewedFileConfirmationPolicy(approved, evidence.Capture), manualAttachmentReview: new ManualAttachmentReview(this, approved, evidenceFolder), reviewedStandardCueRooms: reviewedStandardCueRooms));
+            }, item => Dispatcher.Invoke(() => {
                 resultGrid.Items.Refresh(); progressBar.Value = snapshot.Count(b => b.Status != "준비" && b.Status != "전송 중");
                 sendProgress.Text = $"{item.StudentName} · {item.Status}"; resultGrid.ScrollIntoView(item);
             }), () => { if (!demo) store!.Save(database); }, sendCancellation.Token);

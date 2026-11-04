@@ -9,7 +9,7 @@ using System.Windows.Automation;
 namespace NoticeSender.Automation;
 
 /// <summary>Targeted UIA/Win32 adapter. Composer focus is explicit; it never types into the currently focused window or uses coordinates, clipboard, or global keyboard input.</summary>
-public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
+public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient, IAttachmentCompletionOutcomeSource
 {
     internal sealed record NativeFileModal(nint Window, nint FileView, nint HiddenImageView);
     internal static NativeFileModal InspectNativeFileModal(ChatTarget target, nint modal, IReadOnlySet<nint> baseline)
@@ -18,11 +18,11 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         if (!Owned(target.WindowHandle) || Native.ClassName(target.WindowHandle) != "EVA_Window_Dblclk" || Native.Title(target.WindowHandle) != target.RoomName ||
             !Native.IsWindowVisible(target.WindowHandle) || Native.IsWindowEnabled(target.WindowHandle) || !Owned(target.ComposerHandle) || !Native.IsChild(target.WindowHandle, target.ComposerHandle) ||
             Native.ClassName(target.ComposerHandle) != "RICHEDIT50W" || Native.ControlId(target.ComposerHandle) != 1006)
-            throw new InvalidOperationException("합성 파일 확인 대상 채팅방/입력란 상태가 변경되었습니다.");
+            throw new InvalidOperationException("첨부파일 확인 대상 채팅방/입력란 상태가 변경되었습니다.");
         if (!Owned(modal) || baseline.Contains(modal) || Native.Owner(modal) != target.WindowHandle || Native.ClassName(modal) != "EVA_Window_Dblclk" || !Native.IsWindowVisible(modal) || !Native.IsWindowEnabled(modal))
-            throw new InvalidOperationException("합성 파일 확인의 새 모달 창을 확인할 수 없습니다.");
+            throw new InvalidOperationException("첨부파일 확인의 새 모달 창을 확인할 수 없습니다.");
         var active = OwnedWindowHandles(target.WindowHandle, target.ProcessId).Where(Native.IsWindowEnabled).ToArray();
-        if (active.Length != 1 || active[0] != modal) throw new InvalidOperationException("합성 파일 확인 모달 창이 고유하지 않습니다.");
+        if (active.Length != 1 || active[0] != modal) throw new InvalidOperationException("첨부파일 확인 모달 창이 고유하지 않습니다.");
         var children = Native.Children(modal);
         var file = children.Where(w => Native.Parent(w) == modal && Native.ControlId(w) == 1001).ToArray();
         var image = children.Where(w => Native.Parent(w) == modal && Native.ControlId(w) == 1002).ToArray();
@@ -32,16 +32,26 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
         return new(modal, file[0], image[0]);
     }
     private readonly string? reviewedBotCueRoom;
-    private readonly SyntheticFileConfirmationPolicy? nativeFileConfirmation;
+    private readonly HashSet<string> reviewedStandardCueRooms;
+    private readonly NativeFileConfirmationPolicy? nativeFileConfirmation;
+    private readonly IAttachmentCompletionObserver? attachmentCompletion;
+    private readonly IManualAttachmentReview? manualAttachmentReview;
+    public AttachmentCompletionOutcome? LastAttachmentCompletion { get; private set; }
     /// <param name="reviewedBotCueRoom">Explicit permission to replace the exact observed gray bot cue in this one approved bot room. Null preserves every nonempty draft.</param>
-    public WindowsKakaoClient(string? reviewedBotCueRoom = null, SyntheticFileConfirmationPolicy? nativeFileConfirmation = null)
+    public WindowsKakaoClient(string? reviewedBotCueRoom = null, NativeFileConfirmationPolicy? nativeFileConfirmation = null, IAttachmentCompletionObserver? attachmentCompletion = null, IManualAttachmentReview? manualAttachmentReview = null, IReadOnlyCollection<string>? reviewedStandardCueRooms = null)
     {
         if (reviewedBotCueRoom != null && reviewedBotCueRoom is not ("카카오톡 선물하기" or "지모" or "KREAM"))
             throw new ArgumentException("안내 문구 교체 허용은 지정된 합성 테스트 봇 방으로 제한됩니다.");
         this.reviewedBotCueRoom = reviewedBotCueRoom;
-        if (nativeFileConfirmation != null && reviewedBotCueRoom != null && nativeFileConfirmation.ApprovedBotRoom != reviewedBotCueRoom)
+        this.reviewedStandardCueRooms = new(reviewedStandardCueRooms ?? Array.Empty<string>(), StringComparer.Ordinal);
+        if (this.reviewedStandardCueRooms.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("기본 안내 문구 교체에는 정확한 검토 채팅방 이름이 필요합니다.");
+        if (nativeFileConfirmation != null && reviewedBotCueRoom != null && !nativeFileConfirmation.IsRoomApproved(reviewedBotCueRoom))
             throw new ArgumentException("합성 파일 시험과 안내 문구 교체의 봇 방이 다릅니다.");
         this.nativeFileConfirmation = nativeFileConfirmation;
+        this.attachmentCompletion = attachmentCompletion;
+        if (manualAttachmentReview != null && (nativeFileConfirmation == null || attachmentCompletion != null || reviewedBotCueRoom != null))
+            throw new ArgumentException("사용자 첨부 확인은 최종 검토한 일반 발송에서만 사용할 수 있습니다.");
+        this.manualAttachmentReview = manualAttachmentReview;
     }
     internal sealed record NativeRoomSearch(int ProcessId, nint MainWindow, nint OnlineView, nint ChatView, nint SearchEdit, nint Results);
 
@@ -217,7 +227,7 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
             {
                 var composer = UniqueComposer(Validate(target));
                 if (ReadComposer(composer).Length == 0) { permit = null; return true; }
-                string? approved = target.RoomName == reviewedBotCueRoom ? CaptureReviewedBotCue(composer) : null;
+                string? approved = CaptureAllowedComposerCue(target, composer);
                 permit = approved == null ? null : new ComposerReplacementPermit(target, approved);
                 return permit != null;
             }, token);
@@ -237,9 +247,8 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
             RequireComposerFocus(target);
             additionalChecks();
             if (selectApprovedDocument) Native.SelectAll(target.ComposerHandle);
-            if (permit != null && (permit.Target != target || target.RoomName != reviewedBotCueRoom ||
-                CaptureReviewedBotCue(UniqueComposer(Validate(target))) != permit.ExpectedText))
-                throw new InvalidOperationException("교체를 허용한 봇 안내 문구의 창 또는 내용/서식이 변경되었습니다.");
+            if (permit != null && (permit.Target != target || CaptureAllowedComposerCue(target, UniqueComposer(Validate(target))) != permit.ExpectedText))
+                throw new InvalidOperationException("교체를 허용한 안내 문구의 창 또는 내용/서식이 변경되었습니다.");
             if (selectApprovedDocument) Native.RequireFullSelection(target.ComposerHandle, permit?.ExpectedText.Length ?? 0);
         }
         if (permit == null) WithExpectedComposerText(Checks, () => Native.Text(target.ComposerHandle), "", mutation, token);
@@ -249,7 +258,16 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
     private bool IsAllowedIdleComposer(ChatTarget target)
     {
         var composer = UniqueComposer(Validate(target));
-        return ReadComposer(composer).Length == 0 || target.RoomName == reviewedBotCueRoom && CaptureReviewedBotCue(composer) != null;
+        return ReadComposer(composer).Length == 0 || CaptureAllowedComposerCue(target, composer) != null;
+    }
+    internal string? CaptureAllowedComposerCue(ChatTarget target, AutomationElement composer)
+    {
+        var current = composer.Current;
+        if (current.NativeWindowHandle != target.ComposerHandle || current.ProcessId != target.ProcessId ||
+            Native.Pid(target.WindowHandle) != target.ProcessId || Native.Pid(target.ComposerHandle) != target.ProcessId ||
+            !Native.IsChild(target.WindowHandle, target.ComposerHandle)) return null;
+        string? standard = reviewedStandardCueRooms.Contains(target.RoomName) ? CaptureStandardComposerCue(composer) : null;
+        return standard ?? (target.RoomName == reviewedBotCueRoom ? CaptureReviewedBotCue(composer) : null);
     }
 
     internal sealed class ComposerReplacementPermit(ChatTarget target, string expectedText)
@@ -374,6 +392,7 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
 
     public Task SendFilesAsync(ChatTarget target, IReadOnlyList<string> paths, CancellationToken cancellationToken) => OnSta(() =>
     {
+        LastAttachmentCompletion = null;
         if (paths.Count == 0) return true;
         var files = paths.Select(Path.GetFullPath).ToArray();
         if (files.Any(p => !File.Exists(p) || p.Contains('"'))) throw new InvalidOperationException("첨부 파일이 없거나 파일 경로가 올바르지 않습니다.");
@@ -382,11 +401,14 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
             throw new InvalidOperationException("동일한 파일 이름은 전송 완료를 구별할 수 없습니다.");
         using var fileExperiment = nativeFileConfirmation?.Acquire(target, files);
         bool ownDropIssued = false;
+        bool ownSubmissionIssued = false;
+        DateTimeOffset submittedAt = DateTimeOffset.UtcNow;
         var room = Validate(target);
         cancellationToken.ThrowIfCancellationRequested();
         var permit = PrepareComposerForSend(target, cancellationToken);
         var ownedBaseline = OwnedWindowHandles(target.WindowHandle, target.ProcessId).ToHashSet();
-        var before = FileEvidence(room, files);
+        var before = ReadLegacyAttachmentBaseline(() => FileEvidence(room, files));
+        using var completion = attachmentCompletion?.Begin(target, files, cancellationToken);
         var controls = Elements(room, ControlType.Button).Where(e => e.Current.IsEnabled &&
             e.Current.Name is "파일 보내기" or "파일 첨부" or "파일" or "Send file" or "Attach file").ToArray();
         if (controls.Length > 1) throw new InvalidOperationException("파일 첨부 버튼이 여러 개입니다.");
@@ -400,7 +422,7 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
             if (drops.Length != 1) throw new NotSupportedException("접근성 파일 버튼 또는 고유한 등록 파일 드롭 대상이 없습니다. 파일을 보내지 않았습니다.");
             if (Native.Pid(drops[0]) != target.ProcessId || (drops[0] != target.WindowHandle && !Native.IsChild(target.WindowHandle, drops[0])))
                 throw new InvalidOperationException("파일 드롭 대상의 소유권이 다릅니다.");
-            WithReadyComposer(target, permit, () => fileExperiment?.RequireUnchanged(), () => { ownDropIssued = true; Native.DropFiles(drops[0], files); }, cancellationToken);
+            WithReadyComposer(target, permit, () => fileExperiment?.RequireUnchanged(), () => { ownDropIssued = true; ownSubmissionIssued = true; submittedAt = DateTimeOffset.UtcNow; Native.DropFiles(drops[0], files); }, cancellationToken);
         }
         else
         {
@@ -438,11 +460,11 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
             RequireOwnedElement(edits[0], dialog.Current.NativeWindowHandle, target.ProcessId);
             if (edits[0].Current.NativeWindowHandle != filenameWindow) throw new InvalidOperationException("파일 이름 입력란 식별자가 변경되었습니다.");
             RequireOwnedElement(open[0], dialog.Current.NativeWindowHandle, target.ProcessId);
-        }, () => Native.Text(filenameWindow), filenames, chooseFiles, cancellationToken,
+        }, () => Native.Text(filenameWindow), filenames, () => { ownSubmissionIssued = true; submittedAt = DateTimeOffset.UtcNow; chooseFiles(); }, cancellationToken,
             "선택한 첨부 경로가 변경되어 파일을 열지 않았습니다.");
         }
         // Some versions upload directly; others expose an owned confirmation dialog. Never press an unnamed default button.
-        var end = DateTime.UtcNow.AddSeconds(20);
+        var end = DateTime.UtcNow.AddSeconds(completion == null ? 20 : 90);
         bool confirmed = false;
         while (DateTime.UtcNow < end)
         {
@@ -462,7 +484,7 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
                     {
                         ValidateRoomRoot(target);
                         if (InspectNativeFileModal(target, modal, ownedBaseline) != pin || !Native.HasFileModalFocus(modal))
-                            throw new InvalidOperationException("합성 파일 확인 창/보기/포커스가 변경되었습니다.");
+                            throw new InvalidOperationException("첨부파일 확인 창/보기/포커스가 변경되었습니다.");
                     }, () =>
                     {
                         Native.Key(modal, 0x100, 0x0D);
@@ -482,18 +504,47 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
                     cancellationToken.ThrowIfCancellationRequested(); confirmFiles(); confirmed = true;
                 }
             }
-            else if (FileEvidence(room, files).Where((count, i) => count > before[i]).Count() == files.Length &&
-                     Elements(room, ControlType.ProgressBar).Length == 0)
+            else if (completion != null && Elements(room, ControlType.ProgressBar).Length == 0)
+            {
+                if (completion.Observe(cancellationToken))
+                {
+                    Validate(target);
+                    if (AttachmentDialogs(target, ownedBaseline).Length != 0) throw new InvalidOperationException("첨부 완료 확인 중 새 대화상자가 열렸습니다.");
+                    return true;
+                }
+            }
+            else if (completion == null && AcceptsLegacyAttachmentEvidence(() => FileEvidence(room, files).Where((count, i) => count > before[i]).Count() == files.Length &&
+                     Elements(room, ControlType.ProgressBar).Length == 0))
             {
                 // Completion requires newly visible transcript evidence for every filename, plus no modal/progress UI.
                 Thread.Sleep(300);
                 Validate(target);
-                if (AttachmentDialogs(target, ownedBaseline).Length == 0 && FileEvidence(room, files).Where((count, i) => count > before[i]).Count() == files.Length)
+                if (AttachmentDialogs(target, ownedBaseline).Length == 0 && AcceptsLegacyAttachmentEvidence(() => FileEvidence(room, files).Where((count, i) => count > before[i]).Count() == files.Length))
                     return true;
             }
             Thread.Sleep(150);
         }
-        throw new InvalidOperationException("첨부 전송 완료를 접근성 정보로 확인할 수 없습니다. 채팅방을 열어 두었습니다. 확인 필요 상태를 유지해 주세요.");
+        if (manualAttachmentReview != null && ownSubmissionIssued && completion == null)
+        {
+            void RequireSettled()
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var current = Validate(target);
+                if (OwnedDialogs(target).Length != 0 || Elements(current, ControlType.ProgressBar).Length != 0 || !IsAllowedIdleComposer(target))
+                    throw new InvalidOperationException("첨부 창이나 진행 중인 전송이 남아 있어 완료 확인을 중단했습니다.");
+            }
+            // Expected user interaction is permitted after dispatch. The reviewer verifies the
+            // approved file lease again; the pre-dispatch input-stability checks remain unchanged.
+            RequireSettled();
+            var request = new ManualAttachmentRequest(Guid.NewGuid(), target, files, submittedAt);
+            var accepted = manualAttachmentReview.Review(request, cancellationToken);
+            RequireSettled();
+            if (accepted == null) throw new InvalidOperationException("사용자가 첨부 완료를 확인하지 않아 중단했습니다. 파일을 자동으로 다시 보내지 않습니다.");
+            request.RequireMatch(accepted);
+            LastAttachmentCompletion = accepted;
+            return true;
+        }
+        throw new InvalidOperationException("첨부 전송 완료를 확인할 수 없습니다. 채팅방을 열어 두었습니다. 확인 필요 상태를 유지해 주세요.");
     }, cancellationToken);
 
     public Task CompleteAsync(ChatTarget target, CancellationToken cancellationToken) => OnSta(() =>
@@ -630,15 +681,17 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
     private static string ReadValue(AutomationElement element) => ((ValuePattern)element.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
     internal static string ReadComposer(AutomationElement composer) => Native.Text(composer.Current.NativeWindowHandle);
 
-    internal static string? CaptureReviewedBotCue(AutomationElement composer)
+    internal static string? CaptureStandardComposerCue(AutomationElement composer) => CaptureComposerCue(composer, text => text == "메시지 입력");
+    internal static string? CaptureReviewedBotCue(AutomationElement composer) => CaptureComposerCue(composer,
+        text => text is "챗봇에게 메시지 입력" or "Enter a message to the chatbot" or "チャットボットにメッセージを入力");
+    private static string? CaptureComposerCue(AutomationElement composer, Func<string, bool> acceptedText)
     {
         var current = composer.Current;
         nint window = current.NativeWindowHandle;
         string native = Native.Text(window);
-        // Kakao 26.9's bot cue is an actual RichEdit document, not an OS cue banner.
-        // Shipped IDS_PLUS_FRIEND_100034 and B40 supply these texts and this uniform color.
+        // Observed Kakao cues are actual RichEdit documents. Standard and bot texts have separate room permissions.
         // Text alone is never evidence: normal, undoable, mixed-format and unrelated drafts stay protected.
-        if (native is not ("챗봇에게 메시지 입력" or "Enter a message to the chatbot" or "チャットボットにメッセージを入力") ||
+        if (!acceptedText(native) ||
             current.ClassName != "RICHEDIT50W" || Native.ControlId(window) != 1006 ||
             !composer.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)) return null;
         var range = ((TextPattern)pattern).DocumentRange;
@@ -697,6 +750,10 @@ public sealed class WindowsKakaoClient : IChatClient, IDryRunChatClient
     }
     private static string AllNames(AutomationElement root) => string.Join("\n", root.FindAll(TreeScope.Descendants, Condition.TrueCondition)
         .Cast<AutomationElement>().Where(e => e.Current.ControlType != ControlType.Edit).Select(e => e.Current.Name));
+    // A configured completion method must never fall back to arbitrary filename mentions.
+    private bool UsesLegacyAttachmentEvidence => manualAttachmentReview == null && attachmentCompletion == null;
+    internal int[] ReadLegacyAttachmentBaseline(Func<int[]> evidence) => UsesLegacyAttachmentEvidence ? evidence() : [];
+    internal bool AcceptsLegacyAttachmentEvidence(Func<bool> evidence) => UsesLegacyAttachmentEvidence && evidence();
     private static int[] FileEvidence(AutomationElement room, string[] files)
     {
         // Restrict evidence to transcript containers, excluding composer and arbitrary preview labels.

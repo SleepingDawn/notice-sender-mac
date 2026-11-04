@@ -3,6 +3,21 @@ using NoticeSender.Automation;
 
 internal static class NativeFileConfirmationTests
 {
+    public static Task SelfChatAuthorizationGuards()
+    {
+        using var f = new SyntheticFiles();
+        Reject(() => new SyntheticFileConfirmationPolicy("임세용", (_, _, _) => { }));
+        Reject(() => SyntheticFileConfirmationPolicy.ForSelfChat("임세용", false, (_, _, _) => { }));
+        foreach (string room in new[] { "임세용 ", "임세용(나에게 보내기)", "KREAM", "다른 사람" })
+            Reject(() => SyntheticFileConfirmationPolicy.ForSelfChat(room, true, (_, _, _) => { }));
+        var policy = SyntheticFileConfirmationPolicy.ForSelfChat("임세용", true, (_, _, _) => { });
+        if (!policy.IsSelfChat || !policy.IsRoomApproved("임세용") || policy.IsRoomApproved("KREAM")) throw new Exception("Self-chat authorization leaked into bot scope.");
+        using (var lease = policy.Freeze(f.Target with { RoomName = "임세용" }, new[] { f.File }, () => 7u)) lease.RequireUnchanged();
+        Reject(() => policy.Freeze(f.Target, new[] { f.File }, () => 7u));
+        File.WriteAllText(f.File, "ordinary private content");
+        Reject(() => policy.Freeze(f.Target with { RoomName = "임세용" }, new[] { f.File }, () => 7u));
+        return Task.CompletedTask;
+    }
     public static Task SyntheticManifestGuards()
     {
         using var f = new SyntheticFiles();
@@ -12,30 +27,53 @@ internal static class NativeFileConfirmationTests
         Reject(() => policy.Acquire(f.Target, new[] { f.File })); // This fixture process is not the pinned Kakao binary.
         File.WriteAllText(f.File, "private content must never be accepted");
         Reject(() => policy.Freeze(f.Target, new[] { f.File }, () => 7u));
+        using var korean = new SyntheticFiles("E-한글자료.txt");
+        using (var lease = policy.Freeze(korean.Target, new[] { korean.File }, () => 7u))
+        {
+            lease.RequireUnchanged();
+            bool writeBlocked = false;
+            try { using var writer = new FileStream(korean.File, FileMode.Open, FileAccess.Write, FileShare.Read); }
+            catch (IOException) { writeBlocked = true; }
+            if (!writeBlocked) throw new Exception("Frozen Korean synthetic bytes were not protected from writers.");
+        }
+        Reject(() => policy.Freeze(korean.Target with { RoomName = "human room" }, new[] { korean.File }, () => 7u));
+        Reject(() => policy.Freeze(korean.Target, new[] { korean.File, korean.File }, () => 7u));
+        string mixed = korean.Sibling("B-single.txt");
+        Reject(() => policy.Freeze(korean.Target, new[] { korean.File, mixed }, () => 7u));
+        foreach (string invalid in new[] { "E-한글자료2.txt", "E-한글자료.TXT" })
+        {
+            using var changedName = new SyntheticFiles(invalid);
+            Reject(() => policy.Freeze(changedName.Target, new[] { changedName.File }, () => 7u));
+        }
+        File.WriteAllText(korean.File, "modified Korean attachment");
+        Reject(() => policy.Freeze(korean.Target, new[] { korean.File }, () => 7u));
         return Task.CompletedTask;
     }
     public static Task OnceCaptureInputCancellation()
     {
-        using var f = new SyntheticFiles();
-        foreach (string mode in new[] { "normal", "capture-fails", "input-during-capture", "scope-during-capture", "cancel-during-capture" })
+        foreach (string suffix in new[] { "D-only.txt", "E-한글자료.txt" })
         {
-            uint input = 7; int captured = 0, dispatches = 0; bool changed = false; using var cancel = new CancellationTokenSource();
-            var policy = new SyntheticFileConfirmationPolicy("KREAM", (target, modal, files) =>
+            using var f = new SyntheticFiles(suffix);
+            foreach (string mode in new[] { "normal", "capture-fails", "input-during-capture", "scope-during-capture", "cancel-during-capture" })
             {
-                captured++;
-                if (target != f.Target || modal != 999 || files.Count != 1 || files[0] != f.File) throw new Exception("Capture did not receive the exact frozen manifest/target.");
-                if (mode == "capture-fails") throw new InvalidOperationException("required capture failed");
-                if (mode == "input-during-capture") input++;
-                if (mode == "scope-during-capture") changed = true;
-                if (mode == "cancel-during-capture") cancel.Cancel();
-            });
-            using var lease = policy.Freeze(f.Target, new[] { f.File }, () => input);
-            bool rejected = false;
-            try { lease.Confirm(999, () => { if (changed) throw new InvalidOperationException("scope changed"); }, () => dispatches++, cancel.Token); }
-            catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException) { rejected = true; }
-            if (captured != 1 || dispatches != (mode == "normal" ? 1 : 0) || rejected != (mode != "normal")) throw new Exception("Unsafe file confirmation after " + mode);
-            Reject(() => lease.Confirm(999, () => { }, () => dispatches++, default));
-            if (dispatches != (mode == "normal" ? 1 : 0)) throw new Exception("Consumed confirmation was retried.");
+                uint input = 7; int captured = 0, dispatches = 0; bool changed = false; using var cancel = new CancellationTokenSource();
+                var policy = new SyntheticFileConfirmationPolicy("KREAM", (target, modal, files) =>
+                {
+                    captured++;
+                    if (target != f.Target || modal != 999 || files.Count != 1 || files[0] != f.File) throw new Exception("Capture did not receive the exact frozen manifest/target.");
+                    if (mode == "capture-fails") throw new InvalidOperationException("required capture failed");
+                    if (mode == "input-during-capture") input++;
+                    if (mode == "scope-during-capture") changed = true;
+                    if (mode == "cancel-during-capture") cancel.Cancel();
+                });
+                using var lease = policy.Freeze(f.Target, new[] { f.File }, () => input);
+                bool rejected = false;
+                try { lease.Confirm(999, () => { if (changed) throw new InvalidOperationException("scope changed"); }, () => dispatches++, cancel.Token); }
+                catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException) { rejected = true; }
+                if (captured != 1 || dispatches != (mode == "normal" ? 1 : 0) || rejected != (mode != "normal")) throw new Exception("Unsafe file confirmation after " + mode);
+                Reject(() => lease.Confirm(999, () => { }, () => dispatches++, default));
+                if (dispatches != (mode == "normal" ? 1 : 0)) throw new Exception("Consumed confirmation was retried.");
+            }
         }
         return Task.CompletedTask;
     }
@@ -43,16 +81,23 @@ internal static class NativeFileConfirmationTests
     private sealed class SyntheticFiles : IDisposable
     {
         private readonly string directory;
+        private readonly string stamp;
+        private readonly List<string> files = new();
         public string File { get; }
         public ChatTarget Target { get; } = new(Environment.ProcessId, 123, "KREAM", 456);
-        public SyntheticFiles()
+        public SyntheticFiles(string suffix = "D-only.txt")
         {
-            string stamp = "20261104-075500-123-" + Guid.NewGuid().ToString("N")[..8];
+            stamp = "20261104-075500-123-" + Guid.NewGuid().ToString("N")[..8];
             directory = Path.Combine(Path.GetTempPath(), "NoticeSender-BotSendTest-" + stamp); Directory.CreateDirectory(directory);
-            File = Path.Combine(directory, "NoticeSender-SYNTHETIC-" + stamp + "-D-only.txt");
-            System.IO.File.WriteAllText(File, "NoticeSender synthetic bot-only attachment test. No student data. " + stamp + " " + Path.GetFileName(File), System.Text.Encoding.UTF8);
+            File = Sibling(suffix);
         }
-        public void Dispose() { System.IO.File.Delete(File); Directory.Delete(directory); }
+        public string Sibling(string suffix)
+        {
+            string path = Path.Combine(directory, "NoticeSender-SYNTHETIC-" + stamp + "-" + suffix);
+            System.IO.File.WriteAllText(path, "NoticeSender synthetic bot-only attachment test. No student data. " + stamp + " " + Path.GetFileName(path), System.Text.Encoding.UTF8);
+            files.Add(path); return path;
+        }
+        public void Dispose() { foreach (string path in files) System.IO.File.Delete(path); Directory.Delete(directory); }
     }
     public static Task RegularFileProfile()
     {

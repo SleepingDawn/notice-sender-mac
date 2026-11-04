@@ -119,7 +119,7 @@ public sealed partial class MainWindow
     private UIElement BuildLogs()
     {
         logsGrid.IsReadOnly = true;
-        Ui.Col(logsGrid, "일시", "SentAt", 190, true); Ui.Col(logsGrid, "학생", "StudentName", 130, true); Ui.Col(logsGrid, "채팅방", "ChatRoomName", 190, true); Ui.Col(logsGrid, "결과", "Result", 140, true); Ui.Col(logsGrid, "상세", "Detail", 320, true);
+        Ui.Col(logsGrid, "일시", "SentAt", 190, true); Ui.Col(logsGrid, "학생", "StudentName", 130, true); Ui.Col(logsGrid, "채팅방", "ChatRoomName", 190, true); Ui.Col(logsGrid, "결과", "Result", 140, true); Ui.Col(logsGrid, "완료 확인", "AttachmentCompletionDisplay", 115, true); Ui.Col(logsGrid, "상세", "Detail", 320, true);
         var detail = Ui.Box("발송 기록을 선택하면 당시 메시지와 상세 정보를 확인합니다.", true); detail.IsReadOnly = true; detail.Height = 180;
         logsGrid.SelectionChanged += (_, _) => { if (logsGrid.SelectedItem is SendLog l) detail.Text = $"{l.SentAt:yyyy-MM-dd HH:mm:ss} · {l.StudentName} · {l.Result}\n방: {l.ChatRoomName}\n배치: {l.BatchId}\nSHA256: {l.MessageSHA256}\n{l.Detail}\n\n" + string.Join("\n\n────\n\n", l.Messages ?? new List<string>()); };
         var top = Ui.Stack(Ui.Text("발송 기록", 25), Ui.Text("‘전송 요청 완료’는 상대방 수신 확인과 다릅니다. ‘확인 필요’ 항목은 채팅방을 직접 확인한 뒤 처리하고 자동으로 재전송하지 마세요."), Ui.Actions(Ui.Button("새로고침", RefreshLogs), Ui.Button("CSV 내보내기", () => Guard(() => {

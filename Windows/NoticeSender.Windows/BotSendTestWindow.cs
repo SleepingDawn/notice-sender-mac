@@ -19,6 +19,7 @@ public sealed class BotSendTestWindow : Window
     private readonly bool exitAfterTest;
     private readonly IBotEvidenceCapture? evidenceCapture;
     private readonly string? onlyStep;
+    private readonly bool selfChat;
     private readonly TextBlock status = Ui.Text("합성 봇 테스트 준비");
     private readonly DataGrid results = Ui.Table();
     private readonly Button start;
@@ -28,25 +29,29 @@ public sealed class BotSendTestWindow : Window
     private bool started;
     private bool closeRequested;
 
-    public BotSendTestWindow(string room, string reportPath, bool acknowledgeBotOnly, bool autoStart = false, bool exitAfterTest = false, bool captureEvidence = false, bool replaceReviewedBotCue = false, string? onlyStep = null, bool confirmNativeBotFiles = false)
-        : this(CreateClient(room, acknowledgeBotOnly, replaceReviewedBotCue, captureEvidence, onlyStep, reportPath, confirmNativeBotFiles), room, reportPath, acknowledgeBotOnly, autoStart, exitAfterTest, captureEvidence ? new BotWindowEvidence() : null, onlyStep)
+    public BotSendTestWindow(string room, string reportPath, bool acknowledgeBotOnly, bool autoStart = false, bool exitAfterTest = false, bool captureEvidence = false, bool replaceReviewedBotCue = false, string? onlyStep = null, bool confirmNativeBotFiles = false, bool acknowledgeSelfChat = false)
+        : this(CreateClient(room, acknowledgeBotOnly, replaceReviewedBotCue, captureEvidence, onlyStep, reportPath, confirmNativeBotFiles, acknowledgeSelfChat), room, reportPath, acknowledgeBotOnly, autoStart, exitAfterTest, captureEvidence ? new BotWindowEvidence(acknowledgeSelfChat) : null, onlyStep, acknowledgeSelfChat)
     {
         if (replaceReviewedBotCue)
             status.Text = "명시 허용: 이 봇의 확인한 회색 안내 문구와 동일한 내용/서식만 작업마다 한 번 교체합니다. 일반 초안은 차단합니다.";
     }
 
-    private static WindowsKakaoClient CreateClient(string room, bool acknowledged, bool replaceReviewedBotCue, bool captureEvidence, string? onlyStep, string reportPath, bool confirmNativeBotFiles)
+    private static WindowsKakaoClient CreateClient(string room, bool acknowledged, bool replaceReviewedBotCue, bool captureEvidence, string? onlyStep, string reportPath, bool confirmNativeBotFiles, bool acknowledgeSelfChat)
     {
-        BotSendTestOptions.ValidateDestination(room, acknowledged);
+        BotSendTestOptions.ValidateDestination(room, acknowledged, acknowledgeSelfChat);
+        if (acknowledgeSelfChat && replaceReviewedBotCue) throw new ArgumentException("나에게 보내기에서는 봇 안내 문구 교체를 사용할 수 없습니다.");
         BotSendTestOptions.ValidateNativeFileTest(confirmNativeBotFiles, captureEvidence, onlyStep);
-        var evidence = confirmNativeBotFiles ? new BotFileConfirmationEvidence(reportPath, new BotWindowEvidence()) : null;
+        var evidence = confirmNativeBotFiles ? new BotFileConfirmationEvidence(reportPath, new BotWindowEvidence(acknowledgeSelfChat), acknowledgeSelfChat) : null;
+        NativeFileConfirmationPolicy? policy = evidence == null ? null : acknowledgeSelfChat
+            ? SyntheticFileConfirmationPolicy.ForSelfChat(room, true, evidence.Capture) : new SyntheticFileConfirmationPolicy(room, evidence.Capture);
         return new WindowsKakaoClient(replaceReviewedBotCue ? room : null,
-            evidence == null ? null : new SyntheticFileConfirmationPolicy(room, evidence.Capture));
+            policy, evidence == null ? null : new SyntheticAttachmentCompletionObserver(reportPath, acknowledgeSelfChat),
+            reviewedStandardCueRooms: acknowledgeSelfChat ? new[] { room } : null);
     }
 
-    internal BotSendTestWindow(IChatClient client, string room, string reportPath, bool acknowledgeBotOnly, bool autoStart = false, bool exitAfterTest = false, IBotEvidenceCapture? evidenceCapture = null, string? onlyStep = null)
+    internal BotSendTestWindow(IChatClient client, string room, string reportPath, bool acknowledgeBotOnly, bool autoStart = false, bool exitAfterTest = false, IBotEvidenceCapture? evidenceCapture = null, string? onlyStep = null, bool acknowledgeSelfChat = false)
     {
-        BotSendTestOptions.ValidateDestination(room, acknowledgeBotOnly);
+        BotSendTestOptions.ValidateDestination(room, acknowledgeBotOnly, acknowledgeSelfChat);
         BotSendTestOptions.ValidateStep(onlyStep);
         this.client = client;
         opener = client as IDryRunChatClient ?? throw new ArgumentException("방 열기 검증 기능이 필요합니다.");
@@ -55,12 +60,14 @@ public sealed class BotSendTestWindow : Window
         this.exitAfterTest = exitAfterTest;
         this.evidenceCapture = evidenceCapture;
         this.onlyStep = onlyStep;
-        Title = "공지발송 · 합성 봇 전송 테스트";
+        selfChat = acknowledgeSelfChat;
+        if (selfChat) status.Text = "나에게 보내기 합성 테스트 준비";
+        Title = selfChat ? "공지발송 · 나에게 보내기 합성 테스트" : "공지발송 · 합성 봇 전송 테스트";
         Width = 1030; Height = 700; MinWidth = 780; MinHeight = 540;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         FontFamily = new FontFamily("Malgun Gothic"); FontSize = 14;
         Background = new SolidColorBrush(Color.FromRgb(243, 247, 250));
-        start = Ui.Button("합성 봇 테스트 시작", () => _ = StartAsync(), true);
+        start = Ui.Button(selfChat ? "나에게 보내기 테스트 시작" : "합성 봇 테스트 시작", () => _ = StartAsync(), true);
         cancel = Ui.Button("중지", () => { cancellation?.Cancel(); status.Text = "중지 요청 중… 현재 결과를 저장합니다."; });
         cancel.IsEnabled = false;
         results.IsReadOnly = true;
@@ -69,8 +76,8 @@ public sealed class BotSendTestWindow : Window
         Ui.Col(results, "상태", nameof(BotSendTestStep.DisplayStatus), 230, true);
         Ui.Col(results, "사유", nameof(BotSendTestStep.Error), 300, true);
         var root = new DockPanel { Margin = new Thickness(24) };
-        var heading = Ui.Stack(Ui.Text("합성 봇 전송 테스트", 26), Ui.Text("대상 봇: " + room, 19),
-            Ui.Text("이 봇 방에 실제 합성 메시지와 TXT / CSV / PDF / PNG 파일을 보냅니다. 학생 DB를 열지 않고 새 메모리 데이터만 사용합니다."),
+        var heading = Ui.Stack(Ui.Text(selfChat ? "나에게 보내기 합성 테스트" : "합성 봇 전송 테스트", 26), Ui.Text((selfChat ? "나에게 보내기: " : "대상 봇: ") + room, 19),
+            Ui.Text("이 채팅방에 실제 합성 메시지와 TXT / CSV / PDF / PNG 파일을 보냅니다. 학생 DB를 열지 않고 새 메모리 데이터만 사용합니다."),
             Ui.Text(onlyStep == null ? "메시지 6개, 단일 / 다중 첨부, 첨부 전용, PDF / PNG 단독, 첫 메시지 후 중단과 재시도 차단을 순서대로 확인합니다. 예상 밖 실패는 즉시 중단합니다." : "선택 단계 " + onlyStep + "만 시험합니다. 다른 단계는 보내지 않으며 전체 7개 통과로 기록하지 않습니다.", 12),
             Ui.Actions(start, cancel));
         DockPanel.SetDock(heading, Dock.Top); root.Children.Add(heading);
@@ -90,16 +97,16 @@ public sealed class BotSendTestWindow : Window
         int exitCode = 1;
         try
         {
-            var report = await new BotSendTestRunner(client, opener, evidenceCapture).RunAsync(room, true, reportPath, current =>
+            var report = await new BotSendTestRunner(client, opener, evidenceCapture).RunAsync(room, !selfChat, reportPath, current =>
             {
                 results.ItemsSource = current.Steps; results.Items.Refresh();
                 status.Text = current.Completed
                     ? current.Cancelled ? $"사용자 중지 · 통과 {current.SuccessCount}/{current.RequestedCount}개"
                     : current.Success ? $"{(current.OnlyStep == null ? "합성 테스트 모두 통과" : "선택 테스트 통과")} · {current.SuccessCount}/{current.RequestedCount}개 (제어 중단은 정상)"
                     : $"실패하여 중단 · 통과 {current.SuccessCount}/{current.RequestedCount}개 · {current.Failure}"
-                    : current.Preparation.Status != "verified" ? "봇 방 열기 / 발송 입력란 검증 중…"
+                    : current.Preparation.Status != "verified" ? "채팅방 열기 / 발송 입력란 검증 중…"
                     : $"합성 테스트 진행 중… 통과 {current.SuccessCount}/{current.RequestedCount}개";
-            }, cancellation.Token, onlyStep);
+            }, cancellation.Token, onlyStep, acknowledgeSelfChat: selfChat);
             exitCode = report.ExitCode;
         }
         catch (Exception ex) { status.Text = "테스트를 완료하지 못했습니다: " + WindowsTrustFailure.Describe(ex); }

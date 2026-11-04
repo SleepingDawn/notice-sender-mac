@@ -13,6 +13,37 @@ internal static class RichEditComposerTests
     public static Task UndoableCueDraft() => Check(Cue, 0x949494, true, false, 1006, Cue);
     public static Task MixedCueDraft() => Check(Cue, 0x949494, false, true, 1006, Cue);
     public static Task DifferentControl() => Check(Cue, 0x949494, false, false, 1007, Cue);
+    public static Task StandardCueRequiresReviewedRoom()
+    {
+        const string standard = "메시지 입력";
+        using var fixture = new RichEditFixture(standard, 0x949494, false, false, 1006);
+        var composer = AutomationElement.FromHandle(fixture.Edit);
+        nint root = (nint)NativeMethod("Parent").Invoke(null, new object[] { fixture.Edit })!;
+        var target = new ChatTarget(Environment.ProcessId, root, "임세용", fixture.Edit);
+        string[] approvedRooms = ["임세용"];
+        var client = new WindowsKakaoClient(reviewedStandardCueRooms: approvedRooms); approvedRooms[0] = "changed room";
+        if (WindowsKakaoClient.CaptureStandardComposerCue(composer) != standard ||
+            client.CaptureAllowedComposerCue(target, composer) != standard ||
+            new WindowsKakaoClient().CaptureAllowedComposerCue(target, composer) != null ||
+            client.CaptureAllowedComposerCue(target with { RoomName = "other room" }, composer) != null ||
+            client.CaptureAllowedComposerCue(target with { ComposerHandle = 0 }, composer) != null || fixture.Text != standard)
+            throw new Exception("Standard cue permission was not exact, copied, room-scoped and nonmutating.");
+        return Task.CompletedTask;
+    }
+    public static Task StandardCueDraftsRemainProtected()
+    {
+        foreach (var state in new[] { (Color: 0, Undo: false, Mixed: false), (Color: 0x949494, Undo: true, Mixed: false), (Color: 0x949494, Undo: false, Mixed: true) })
+        {
+            using var fixture = new RichEditFixture("메시지 입력", state.Color, state.Undo, state.Mixed, 1006);
+            if (WindowsKakaoClient.CaptureStandardComposerCue(AutomationElement.FromHandle(fixture.Edit)) != null || fixture.Text != "메시지 입력")
+                throw new Exception("A normal, undoable or mixed-format user draft was treated as a standard cue.");
+        }
+        using var bot = new RichEditFixture(Cue, 0x949494, false, false, 1006);
+        var element = AutomationElement.FromHandle(bot.Edit); nint root = (nint)NativeMethod("Parent").Invoke(null, new object[] { bot.Edit })!;
+        if (new WindowsKakaoClient(reviewedStandardCueRooms: new[] { "KREAM" }).CaptureAllowedComposerCue(new(Environment.ProcessId, root, "KREAM", bot.Edit), element) != null)
+            throw new Exception("Standard cue permission implicitly enabled bot-cue replacement.");
+        return Task.CompletedTask;
+    }
 
     private static Task Check(string text, int color, bool undoable, bool mixed, int id, string expected, string? approvedCue = null)
     {

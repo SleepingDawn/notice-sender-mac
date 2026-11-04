@@ -24,7 +24,7 @@ internal sealed record BotEvidenceImage(string Role, long WindowHandle, int Widt
     string? Path, string Method, string? Error);
 
 /// <summary>Optional visual diagnostics of an exact verified bot root and its same-process owned windows. Ownership does not establish modality. Never authorizes or completes delivery.</summary>
-internal sealed class BotWindowEvidence : IBotEvidenceCapture
+internal sealed class BotWindowEvidence(bool acknowledgeSelfChat = false) : IBotEvidenceCapture
 {
     private int sequence;
     public BotEvidenceCaptureResult Capture(ChatTarget target, string stage, string artifactDirectory)
@@ -46,7 +46,7 @@ internal sealed class BotWindowEvidence : IBotEvidenceCapture
         {
             string? guard = MatchTarget(target);
             if (guard != null) return new(at, stage, target.WindowHandle.ToInt64(), images, guard);
-            var windows = new List<(nint Handle, string Role)> { (target.WindowHandle, "bot-root") };
+            var windows = new List<(nint Handle, string Role)> { (target.WindowHandle, acknowledgeSelfChat ? "self-chat-root" : "bot-root") };
             Native.EnumWindows((window, _) =>
             {
                 if (windows.Count < 9 && window != target.WindowHandle && Native.IsWindowVisible(window) && OwnedByTarget(window, target))
@@ -63,10 +63,10 @@ internal sealed class BotWindowEvidence : IBotEvidenceCapture
         catch (Exception ex) { return new(at, stage, target.WindowHandle.ToInt64(), images, "증거 캡처 진단: " + ex.Message); }
     }
 
-    private static string? MatchTarget(ChatTarget target)
+    private string? MatchTarget(ChatTarget target)
     {
-        try { BotSendTestOptions.ValidateDestination(target.RoomName, true); }
-        catch (ArgumentException) { return "허용 봇 이외의 창은 캡처하지 않습니다."; }
+        try { BotSendTestOptions.ValidateDestination(target.RoomName, !acknowledgeSelfChat, acknowledgeSelfChat); }
+        catch (ArgumentException) { return "명시 확인한 시험 대상 이외의 창은 캡처하지 않습니다."; }
         if (target.ProcessId <= 0 || target.WindowHandle == 0) return "유효한 검증 프로세스 / 창 식별자가 없습니다.";
         if (!Native.IsWindow(target.WindowHandle)) return "검증한 봇 창이 더 이상 존재하지 않습니다.";
         if (Pid(target.WindowHandle) != target.ProcessId) return "검증한 봇 창의 프로세스가 변경되었습니다.";

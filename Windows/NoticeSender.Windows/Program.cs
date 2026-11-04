@@ -13,8 +13,8 @@ internal static class Program
 {
     internal static bool ModesAreCompatible(string[] args)
     {
-        if (args.Contains("--bot-send-test"))
-            return !args.Any(arg => arg is "--demo" or "--smoke-test" or "--diagnose-kakao" or "--dry-run-rooms");
+        if (args.Contains("--bot-send-test") || args.Contains("--self-chat-send-test"))
+            return !(args.Contains("--bot-send-test") && args.Contains("--self-chat-send-test")) && !args.Any(arg => arg is "--demo" or "--smoke-test" or "--diagnose-kakao" or "--dry-run-rooms");
         return !args.Contains("--dry-run-rooms") || !args.Any(arg => arg is "--demo" or "--smoke-test" or "--diagnose-kakao");
     }
 
@@ -22,7 +22,7 @@ internal static class Program
     public static int Main(string[] args)
     {
         if (!ModesAreCompatible(args)) return 1;
-        if (args.Contains("--bot-send-test")) return RunBotSendTest(args);
+        if (args.Contains("--bot-send-test") || args.Contains("--self-chat-send-test")) return RunBotSendTest(args);
         if (args.Contains("--dry-run-rooms")) return RunRoomDryRun(args);
         bool smoke = args.Contains("--smoke-test");
         bool demo = smoke || args.Contains("--demo");
@@ -50,7 +50,17 @@ internal static class Program
                 {
                     try
                     {
-                        WindowsTrustFailureSmokeTests.Run(); window.VerifySmokeTest(); await RoomDryRunSmokeTests.RunAsync(); await BotSendTestSmokeTests.RunAsync();
+                        string? renderFixtures = Environment.GetEnvironmentVariable("NOTICE_SENDER_VISUAL_FIXTURES");
+                        if (!string.IsNullOrEmpty(renderFixtures)) AttachmentVisualSmokeTests.RunExpectedRendering(renderFixtures, Path.Combine(AppContext.BaseDirectory, "ocr", "tesseract.exe"), Path.Combine(AppContext.BaseDirectory, "ocr", "tessdata"));
+                        if (!string.IsNullOrEmpty(renderFixtures)) AttachmentVisualSmokeTests.RunFreshRegressionFixtures(renderFixtures, Path.Combine(AppContext.BaseDirectory, "ocr", "tesseract.exe"), Path.Combine(AppContext.BaseDirectory, "ocr", "tessdata"));
+                        if (!string.IsNullOrEmpty(renderFixtures)) AttachmentVisualSmokeTests.RunPngStampRegressionFixtures(renderFixtures, Path.Combine(AppContext.BaseDirectory, "ocr", "tesseract.exe"), Path.Combine(AppContext.BaseDirectory, "ocr", "tessdata"));
+                        WindowsTrustFailureSmokeTests.Run(); window.VerifySmokeTest(); await RoomDryRunSmokeTests.RunAsync(); await BotSendTestSmokeTests.RunAsync(); await ReviewedBatchExecutionSmokeTests.RunAsync(); ExactTranscriptCaptureSmokeTests.Run(); ManualAttachmentReviewSmokeTests.Run();
+                        string? visualFixtures = Environment.GetEnvironmentVariable("NOTICE_SENDER_VISUAL_FIXTURES");
+                        if (!string.IsNullOrEmpty(visualFixtures))
+                        {
+                            AttachmentVisualSmokeTests.Run(visualFixtures, Path.Combine(AppContext.BaseDirectory, "ocr", "tesseract.exe"), Path.Combine(AppContext.BaseDirectory, "ocr", "tessdata"));
+                            AttachmentVisualSmokeTests.RunSyntheticImage(Path.Combine(visualFixtures, "transcript-native-20261104.direct.png"), Path.Combine(visualFixtures, "synthetic-image.png"), Path.Combine(AppContext.BaseDirectory, "ocr", "tesseract.exe"), Path.Combine(AppContext.BaseDirectory, "ocr", "tessdata"));
+                        }
                         File.WriteAllText(Path.Combine(Path.GetTempPath(), "NoticeSender-smoke-success.json"), JsonSerializer.Serialize(new { completed = true, exitCode = 0, syntheticOnly = true, at = DateTimeOffset.Now }));
                         app.Shutdown(0);
                     }
@@ -97,7 +107,7 @@ internal static class Program
     {
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         Ui.InstallStyles(app);
-        return app.Run(new BotSendTestWindow(options.Room, options.ReportPath, acknowledgeBotOnly: true, autoStart: true, exitAfterTest: options.ExitAfterTest, captureEvidence: options.CaptureEvidence, replaceReviewedBotCue: options.ReplaceReviewedBotCue, onlyStep: options.OnlyStep, confirmNativeBotFiles: options.ConfirmNativeBotFiles));
+        return app.Run(new BotSendTestWindow(options.Room, options.ReportPath, acknowledgeBotOnly: !options.SelfChat, autoStart: true, exitAfterTest: options.ExitAfterTest, captureEvidence: options.CaptureEvidence, replaceReviewedBotCue: options.ReplaceReviewedBotCue, onlyStep: options.OnlyStep, confirmNativeBotFiles: options.ConfirmNativeBotFiles, acknowledgeSelfChat: options.SelfChat));
     }
 
     internal static void WriteBotStartupFailureReport(string[] args, Exception exception)
@@ -113,7 +123,7 @@ internal static class Program
             // app.Run may escape after delivery has started: never replace its trace, logs, evidence, or another existing file.
             string output = File.Exists(path) ? Sidecar() : path;
             string temporary = output + ".tmp-" + Guid.NewGuid().ToString("N");
-            File.WriteAllText(temporary, JsonSerializer.Serialize(new { mode = "bot-send-test", completed = true, success = false, cancelled = false, exitCode = 1,
+            File.WriteAllText(temporary, JsonSerializer.Serialize(new { mode = args.Contains("--self-chat-send-test") ? "self-chat-send-test" : "bot-send-test", completed = true, success = false, cancelled = false, exitCode = 1,
                 failure = WindowsTrustFailure.Describe(exception), failureKind = failure?.Kind.ToString(), errorCode = failure?.ErrorCode, helpUrl = failure?.HelpUrl,
                 originalReportPath = path }, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
             try { File.Move(temporary, output, overwrite: false); }

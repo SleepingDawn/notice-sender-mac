@@ -1,10 +1,19 @@
 param(
     [string]$DotNetPath = '',
     [switch]$Publish,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [string]$OcrRuntimeDirectory = $env:NOTICE_SENDER_OCR_RUNTIME,
+    [switch]$RequireBotReceiptRuntime
 )
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path $PSScriptRoot -Parent
+$version = ([xml](Get-Content -LiteralPath (Join-Path $repository 'Windows\Directory.Build.props') -Raw)).Project.PropertyGroup.Version
+if (!$version -or $version -notmatch '^[0-9A-Za-z.-]+$') { throw 'Invalid Windows package version.' }
+$output = Join-Path $repository 'dist\NoticeSender-Windows'
+$ocrHelper = Join-Path $PSScriptRoot 'copy-windows-ocr-runtime.ps1'
+if ($RequireBotReceiptRuntime -and !$OcrRuntimeDirectory) { throw 'OCR runtime is required: provide -OcrRuntimeDirectory or NOTICE_SENDER_OCR_RUNTIME before building a bot-receipt package.' }
+if ($OcrRuntimeDirectory) { & $ocrHelper -RuntimeDirectory $OcrRuntimeDirectory -VerifyOnly }
+elseif ($Publish -and (Test-Path -LiteralPath (Join-Path $output 'ocr'))) { throw 'Existing output/ocr cannot be reused without -OcrRuntimeDirectory; provide its verified source for this package.' }
 if (!$DotNetPath) {
     $installed = Get-Command dotnet -ErrorAction SilentlyContinue
     if ($installed) { $DotNetPath = $installed.Source }
@@ -36,11 +45,13 @@ if (!$SkipTests) {
     Write-Output 'WPF 격리 스모크 검사 통과'
 }
 if ($Publish) {
-    $output = Join-Path $repository 'dist\NoticeSender-Windows'
     Invoke-DotNet publish $appProject --configuration Release --runtime win-x64 --self-contained true '-p:PublishSingleFile=false' --output $output
+    if ($OcrRuntimeDirectory) { & $ocrHelper -RuntimeDirectory $OcrRuntimeDirectory -PublishDirectory $output }
+    else { Write-Warning 'OCR runtime is not bundled; automatic attachment receipt checks are unavailable. Use -OcrRuntimeDirectory and -RequireBotReceiptRuntime for a receipt-enabled package.' }
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\README.md') -Destination (Join-Path $output 'Windows-Guide.md') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\TESTING.md') -Destination (Join-Path $output 'TESTING.md') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'Windows\SIGNING.md') -Destination (Join-Path $output 'SIGNING.md') -Force
+    Copy-Item -LiteralPath (Join-Path $repository 'Windows\OCR-RUNTIME.md') -Destination (Join-Path $output 'OCR-RUNTIME.md') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination (Join-Path $output 'LICENSE.txt') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'PRIVACY.md') -Destination (Join-Path $output 'PRIVACY.md') -Force
     Copy-Item -LiteralPath (Join-Path $repository 'CODE_SIGNING_POLICY.md') -Destination (Join-Path $output 'CODE_SIGNING_POLICY.md') -Force
@@ -50,7 +61,7 @@ if ($Publish) {
         if ($publishedSmoke.ExitCode -ne 0) { throw "자체 포함 배포본 검사 실패: $($publishedSmoke.ExitCode)" }
         Write-Output '자체 포함 배포본 격리 스모크 검사 통과'
     }
-    $archive = Join-Path $repository 'dist\NoticeSender-3.1.2-preview.1-Windows-x64.zip'
+    $archive = Join-Path $repository ('dist\NoticeSender-' + $version + '-Windows-x64.zip')
     Compress-Archive -LiteralPath $output -DestinationPath $archive -Force
     Write-Output "배포 파일: $archive"
 }

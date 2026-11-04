@@ -38,7 +38,12 @@ public sealed class SendCoordinator(IChatClient client)
                     Messages = [.. messages], MessageSHA256 = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(messages)))) };
                 log.Result = dryRun ? "준비" : "전송 중";
                 if (dryRun) log.Detail = "드라이런 검사 시작: 메시지·파일 전송 없음";
-                if (!dryRun) original.Status = log.Result;
+                if (!dryRun)
+                {
+                    original.Status = log.Result;
+                    original.AttachmentCompletionKind = null; original.AttachmentCompletionConfirmedAt = null;
+                    original.AttachmentCompletionAuditReference = null; original.AttachmentCompletionBatchId = null; original.AttachmentCompletionAttemptId = null;
+                }
                 database.Logs.Add(log);
                 // If persistence fails here, absolutely no transport operation is allowed.
                 persist(); progress(original);
@@ -55,6 +60,7 @@ public sealed class SendCoordinator(IChatClient client)
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!dryRun)
                     {
+                        AttachmentCompletionOutcome? attachmentOutcome = null;
                         foreach (var message in messages)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
@@ -66,9 +72,22 @@ public sealed class SendCoordinator(IChatClient client)
                             cancellationToken.ThrowIfCancellationRequested();
                             possibleDelivery = true;
                             await client.SendFilesAsync(target, item.AttachmentPaths, cancellationToken);
+                            attachmentOutcome = (client as IAttachmentCompletionOutcomeSource)?.LastAttachmentCompletion;
+                            attachmentOutcome?.RequireMatch(item.Id, target, item.AttachmentPaths);
                         }
                         cancellationToken.ThrowIfCancellationRequested();
                         await client.CompleteAsync(target, cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        // User confirmation is committed only after the native final-state checks also succeed.
+                        if (attachmentOutcome != null)
+                        {
+                            original.AttachmentCompletionKind = log.AttachmentCompletionKind = attachmentOutcome.Kind;
+                            original.AttachmentCompletionConfirmedAt = log.AttachmentCompletionConfirmedAt = attachmentOutcome.ConfirmedAt;
+                            original.AttachmentCompletionAuditReference = log.AttachmentCompletionAuditReference = attachmentOutcome.AuditReference;
+                            original.AttachmentCompletionBatchId = log.AttachmentCompletionBatchId = attachmentOutcome.BatchId;
+                            original.AttachmentCompletionAttemptId = log.AttachmentCompletionAttemptId = attachmentOutcome.AttemptId;
+                            log.Detail = "첨부 완료는 사용자가 카카오톡에서 확인했습니다. 자동 완료 확인이 아닙니다.";
+                        }
                     }
                     log.Result = dryRun ? "드라이런 확인 완료" : "전송 요청 완료";
                     original.Status = preserveStatus ? priorStatus : log.Result;

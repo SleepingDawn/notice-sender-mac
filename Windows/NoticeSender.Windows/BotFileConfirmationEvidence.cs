@@ -3,22 +3,24 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using NoticeSender.Automation;
 
 namespace NoticeSender.Windows;
 
 /// <summary>Mandatory pre-dispatch evidence for the opt-in synthetic attachment experiment; never a delivery receipt.</summary>
-internal sealed class BotFileConfirmationEvidence(string reportPath, IBotEvidenceCapture capture)
+internal sealed class BotFileConfirmationEvidence(string reportPath, IBotEvidenceCapture capture, bool acknowledgeSelfChat = false)
 {
     internal void Capture(ChatTarget target, nint modal, IReadOnlyList<string> files)
     {
-        string auditPath = Path.GetFullPath(reportPath) + ".native-file-confirmation.json";
+        BotSendTestOptions.ValidateDestination(target.RoomName, !acknowledgeSelfChat, acknowledgeSelfChat);
+        string auditPath = AuditPath(reportPath, files);
         Directory.CreateDirectory(Path.GetDirectoryName(auditPath)!);
         // A consumed/failed attempt cannot overwrite its evidence or authorize a second dispatch.
         using var audit = new FileStream(auditPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
         var evidence = capture.Capture(target, "native-file-before-confirm", Path.GetDirectoryName(files[0])!);
-        RequireImages(evidence, target.WindowHandle, modal);
+        RequireImages(evidence, target.WindowHandle, modal, acknowledgeSelfChat ? "self-chat-root" : "bot-root");
         var manifest = files.Select(path =>
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -39,7 +41,7 @@ internal sealed class BotFileConfirmationEvidence(string reportPath, IBotEvidenc
             JsonSerializer.Serialize(audit, new
             {
                 stage = "before-native-file-confirmation", deliveryConfirmed = false,
-                room = target.RoomName, processId = target.ProcessId,
+                room = target.RoomName, destinationKind = acknowledgeSelfChat ? "self-chat" : "bot", processId = target.ProcessId,
                 rootWindow = target.WindowHandle.ToInt64(), modalWindow = modal.ToInt64(),
                 files = manifest, images = imageManifest, evidence
             }, new JsonSerializerOptions { WriteIndented = true });
@@ -48,11 +50,20 @@ internal sealed class BotFileConfirmationEvidence(string reportPath, IBotEvidenc
         finally { foreach (var stream in imageStreams) stream.Dispose(); }
     }
 
-    internal static void RequireImages(BotEvidenceCaptureResult evidence, nint root, nint modal)
+    internal static string AuditPath(string report, IReadOnlyList<string> files)
+    {
+        // Each reviewed batch gets one durable attempt, including when several steps share a report.
+        // Repeating the same ordered batch still hits CreateNew and cannot authorize another send.
+        string identity = JsonSerializer.Serialize(files.Select(Path.GetFullPath).ToArray());
+        string digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
+        return Path.GetFullPath(report) + ".native-file-confirmation-" + digest + ".json";
+    }
+
+    internal static void RequireImages(BotEvidenceCaptureResult evidence, nint root, nint modal, string rootRole = "bot-root")
     {
         if (root == 0 || modal == 0 || root == modal || evidence.Error != null || evidence.RootWindowHandle != root.ToInt64())
             throw new InvalidOperationException("파일 확인 직전의 봇 창 증거가 유효하지 않습니다.");
-        foreach (var expected in new[] { (Handle: root.ToInt64(), Role: "bot-root"), (Handle: modal.ToInt64(), Role: "owned-window") })
+        foreach (var expected in new[] { (Handle: root.ToInt64(), Role: rootRole), (Handle: modal.ToInt64(), Role: "owned-window") })
         {
             var matches = evidence.Images.Where(i => i.WindowHandle == expected.Handle).ToArray();
             if (matches.Length != 1 || matches[0].Role != expected.Role || matches[0].Error != null || matches[0].Width <= 0 || matches[0].Height <= 0 ||

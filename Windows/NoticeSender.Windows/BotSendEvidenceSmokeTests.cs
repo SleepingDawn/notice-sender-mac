@@ -12,6 +12,10 @@ internal static class BotSendEvidenceSmokeTests
     internal static void RunGuards()
     {
         CheckRequiredFileEvidence();
+        string auditRoot = Path.Combine(Path.GetTempPath(), "NoticeSender-audit-scope");
+        string firstAudit = BotFileConfirmationEvidence.AuditPath(auditRoot, new[] { auditRoot + "-B.txt" });
+        Require(firstAudit != BotFileConfirmationEvidence.AuditPath(auditRoot, new[] { auditRoot + "-C.txt" }), "여러 첨부 단계가 같은 일회성 증거 파일을 사용합니다.");
+        Require(firstAudit == BotFileConfirmationEvidence.AuditPath(auditRoot, new[] { auditRoot + "-B.txt" }), "같은 첨부의 재시도가 새로운 증거 경로를 발급받습니다.");
         using (var release = new ManualResetEventSlim())
         using (var completed = new ManualResetEventSlim())
         {

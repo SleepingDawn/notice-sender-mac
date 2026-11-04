@@ -14,7 +14,8 @@ namespace NoticeSender.Windows;
 
 internal sealed class BotSendTestReport
 {
-    public string Mode => "bot-send-test";
+    public string Mode => SelfChat ? "self-chat-send-test" : "bot-send-test";
+    public bool SelfChat { get; init; }
     public string Room { get; init; } = "";
     public string? OnlyStep { get; init; }
     public string TestStamp { get; } = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N")[..8];
@@ -73,15 +74,17 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
 
-    internal async Task<BotSendTestReport> RunAsync(string room, bool acknowledged, string reportPath, Action<BotSendTestReport>? progress, CancellationToken cancellationToken, string? onlyStep = null)
+    internal async Task<BotSendTestReport> RunAsync(string room, bool acknowledged, string reportPath, Action<BotSendTestReport>? progress, CancellationToken cancellationToken, string? onlyStep = null, bool acknowledgeSelfChat = false)
     {
-        BotSendTestOptions.ValidateDestination(room, acknowledged);
+        BotSendTestOptions.ValidateDestination(room, acknowledged, acknowledgeSelfChat);
         BotSendTestOptions.ValidateStep(onlyStep);
         var database = new AppDatabase();
-        var report = new BotSendTestReport { Room = room, OnlyStep = onlyStep, Logs = database.Logs, EvidenceCaptureEnabled = evidenceCapture != null };
-        foreach (var (id, title) in new[] { ("A", "개별 + 공통 메시지 5개"), ("B", "메시지 + 단일 TXT"), ("C", "메시지 + TXT / CSV"),
-            ("D", "첨부 전용 단일 TXT"), ("E-PDF", "메시지 + PDF 단독"), ("E-PNG", "메시지 + PNG 단독 / 이미지 미리보기"), ("F", "첫 메시지 후 제어 중단 / 재시도 차단") })
-            report.Steps.Add(new() { Id = id, Title = title });
+        var report = new BotSendTestReport { Room = room, SelfChat = acknowledgeSelfChat, OnlyStep = onlyStep, Logs = database.Logs, EvidenceCaptureEnabled = evidenceCapture != null };
+        if (onlyStep == "E-KOREAN") report.Steps.Add(new() { Id = "E-KOREAN", Title = "메시지 + 한글 파일명 TXT 단독" });
+        else
+            foreach (var (id, title) in new[] { ("A", "개별 + 공통 메시지 5개"), ("B", "메시지 + 단일 TXT"), ("C", "메시지 + TXT / CSV"),
+                ("D", "첨부 전용 단일 TXT"), ("E-PDF", "메시지 + PDF 단독"), ("E-PNG", "메시지 + PNG 단독 / 이미지 미리보기"), ("F", "첫 메시지 후 제어 중단 / 재시도 차단") })
+                report.Steps.Add(new() { Id = id, Title = title });
         void Save()
         {
             string path = Path.GetFullPath(reportPath);
@@ -180,6 +183,16 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
         Directory.CreateDirectory(folder);
         report.ArtifactDirectory = folder;
         string FilePath(string suffix) => Path.Combine(folder, "NoticeSender-SYNTHETIC-" + stamp + "-" + suffix);
+        string Text(string step, string detail) => $"[NoticeSender 합성 봇 테스트 {stamp} / {step}] {detail}";
+        if (report.OnlyStep == "E-KOREAN")
+        {
+            string korean = FilePath("E-한글자료.txt");
+            File.WriteAllText(korean, "NoticeSender synthetic bot-only attachment test. No student data. " + stamp + " " + Path.GetFileName(korean), Encoding.UTF8);
+            report.SyntheticFiles.Add(korean);
+            report.Steps.Single().Messages.Add(Text("E-KOREAN", "한글 파일명 TXT 단독 첨부"));
+            report.Steps.Single().AttachmentPaths.Add(korean);
+            return;
+        }
         string single = FilePath("B-single.txt"), multiple = FilePath("C-first.txt"), only = FilePath("D-only.txt"),
             csv = FilePath("C-second.csv"), pdf = FilePath("E-document.pdf"), png = FilePath("E-image.png");
         foreach (string txt in new[] { single, multiple, only })
@@ -188,7 +201,6 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
         File.WriteAllBytes(pdf, CreateSyntheticPdf(stamp));
         CreateSyntheticPng(png, stamp);
         report.SyntheticFiles.AddRange(new[] { single, multiple, csv, only, pdf, png });
-        string Text(string step, string detail) => $"[NoticeSender 합성 봇 테스트 {stamp} / {step}] {detail}";
         report.Steps[0].Messages.Add(Text("A", "개별 메시지"));
         report.Steps[0].Messages.AddRange(Enumerable.Range(1, 5).Select(i => Text("A", $"공통 메시지 {i}/5")));
         report.Steps[1].Messages.Add(Text("B", "단일 TXT 첨부")); report.Steps[1].AttachmentPaths.Add(single);
@@ -202,17 +214,7 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
 
     private static void CreateSyntheticPng(string path, string stamp)
     {
-        using var bitmap = new System.Drawing.Bitmap(320, 160, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
-        using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
-        using (var ink = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(24, 43, 65)))
-        using (var accent = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(26, 101, 130)))
-        using (var font = new System.Drawing.Font(System.Drawing.FontFamily.GenericSansSerif, 11))
-        {
-            graphics.Clear(System.Drawing.Color.AliceBlue);
-            graphics.FillRectangle(accent, 0, 0, bitmap.Width, 18);
-            graphics.DrawString("NoticeSender synthetic bot test\n\n" + stamp + "\n\nNo student data", font, ink, new System.Drawing.RectangleF(12, 30, 296, 120));
-        }
-        bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        File.WriteAllBytes(path, SyntheticBotImage.Create(stamp));
     }
 
     private static byte[] CreateSyntheticPdf(string stamp)
@@ -301,7 +303,13 @@ internal sealed class BotSendTestRunner(IChatClient client, IDryRunChatClient op
         {
             Target(target);
             if (paths.Any(p => !report.SyntheticFiles.Contains(p, StringComparer.Ordinal))) throw new InvalidOperationException("생성한 합성 파일 이외의 전송을 차단했습니다.");
-            await Call("send-files", async () => { await inner.SendFilesAsync(target, paths, ct); return true; }, ct, files: paths.ToArray());
+            await Call("send-files", async () =>
+            {
+                await inner.SendFilesAsync(target, paths, ct);
+                if (inner is IAttachmentCompletionOutcomeSource source && source.LastAttachmentCompletion != null)
+                    throw new InvalidOperationException("합성 자동 시험에서는 사용자 확인 결과를 자동 완료로 처리할 수 없습니다.");
+                return true;
+            }, ct, files: paths.ToArray());
         }
         public async Task CompleteAsync(ChatTarget target, CancellationToken ct)
         { Target(target); await Call("complete", async () => { await inner.CompleteAsync(target, ct); return true; }, ct); }

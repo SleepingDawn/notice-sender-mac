@@ -1,10 +1,10 @@
 # Windows 신뢰 서명 준비
 
-2026-11-04 기준 사용자는 **Smart App Control을 유지하고 신뢰 서명을 준비**하기로 선택했고, 원본 코드 권한 보유를 확인하며 MIT 적용 및 무료 SignPath 심사 신청을 승인했습니다. 현재 배포본은 서명되지 않았으며 실제 카카오톡 텍스트·파일 전송 시험은 재개하지 않았습니다.
+2026-11-04 기준 사용자는 **Smart App Control을 유지하고 신뢰 서명을 준비**하기로 선택했고, 원본 코드 권한 보유를 확인하며 MIT 적용 및 무료 SignPath 심사 신청을 승인했습니다. 현재 배포본은 서명되지 않았습니다. 실제 카카오톡 텍스트·파일 시험은 승인된 로컬 Windows VM에서 수행하며, 호스트의 실행 차단 해제나 신뢰 서명 완료와 구분합니다. 최신 기능 검증은 [TESTING.md](TESTING.md)에 기록합니다.
 
 ## 현재 확인한 대상
 
-`dist/NoticeSender-Windows` 전체의 EXE/DLL을 읽기 전용으로 검사합니다. 현재 로컬 보고서에는 458개 중 Microsoft 배포 파일 454개의 서명이 Valid이고 아래 4개가 NotSigned입니다. 빌드에 따라 파일 개수는 달라질 수 있습니다.
+`dist/NoticeSender-Windows` 전체의 EXE/DLL을 읽기 전용으로 검사합니다. OCR 런타임을 포함한 preview.2의 로컬 보고서에는 524개 중 Valid 468개, NotSigned 54개, UnknownError 2개가 기록되어 있습니다. 아래 앱 파일 네 개도 모두 NotSigned입니다. OCR 의존성의 미서명·검증 불명 파일도 신뢰할 수 있는 배포 경로를 마련해야 하며, 앱 파일 네 개의 서명만으로 전체 배포본의 SAC 실행을 보장하지 않습니다. 빌드에 따라 파일 개수는 달라질 수 있습니다.
 
 - `NoticeSender.exe`
 - `NoticeSender.dll`

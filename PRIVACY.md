@@ -8,6 +8,8 @@ The desktop app manages information selected or entered by its operator: student
 
 The current Windows application has no project-operated network backend, advertising or analytics client. It does not upload its student database or diagnostics to the maintainer or SignPath. The project does not ask for KakaoTalk passwords; the operator logs into KakaoTalk itself. It does not log into Google Sheets or call its API; spreadsheet values are imported from files or pasted by the operator.
 
+Windows attachment confirmation records selected KakaoTalk window/dialog captures and file names, paths, sizes and hashes locally under `%LOCALAPPDATA%\NoticeSender\AttachmentEvidence`. Captures can include messages already visible in the selected chatroom. When automatic completion cannot be established, an explicit operator confirmation is recorded separately as a user confirmation. These evidence files can be removed independently of the application database. The optional bot-test receipt recognizer processes captured images locally with bundled OCR; it does not upload them to an OCR service. Bot-test reports and captures are saved beside the chosen test report.
+
 ## Requested transfers and other services
 
 When the operator authorizes sending, selected message text and files are delivered through the locally installed KakaoTalk client to selected recipients. KakaoTalk and its recipients then process that content under their own arrangements. See [Kakao's privacy policy](https://www.kakao.com/policy/privacy). A dry run searches/opens/verifies rooms without entering or sending message text or attachments.

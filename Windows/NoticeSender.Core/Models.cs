@@ -115,6 +115,13 @@ public class BatchItem : ExtensibleModel
     public List<string> CommonMessages { get; set; } = [];
     public List<string> AttachmentPaths { get; set; } = [];
     public bool? PreserveMessageWhitespace { get; set; }
+    public string? AttachmentCompletionKind { get; set; }
+    public DateTimeOffset? AttachmentCompletionConfirmedAt { get; set; }
+    public string? AttachmentCompletionAuditReference { get; set; }
+    public Guid? AttachmentCompletionBatchId { get; set; }
+    public Guid? AttachmentCompletionAttemptId { get; set; }
+    [JsonIgnore]
+    public string AttachmentCompletionDisplay => Status == "전송 요청 완료" ? AttachmentCompletionKind == "user-confirmed" ? "사용자 확인" : "앱 확인" : "";
 
     [JsonIgnore]
     public IReadOnlyList<string> AllMessages => new[]
@@ -141,6 +148,13 @@ public class SendLog : ExtensibleModel
     public DateTimeOffset SentAt { get; set; } = DateTimeOffset.UtcNow;
     public List<string>? Messages { get; set; }
     public string? Detail { get; set; }
+    public string? AttachmentCompletionKind { get; set; }
+    public DateTimeOffset? AttachmentCompletionConfirmedAt { get; set; }
+    public string? AttachmentCompletionAuditReference { get; set; }
+    public Guid? AttachmentCompletionBatchId { get; set; }
+    public Guid? AttachmentCompletionAttemptId { get; set; }
+    [JsonIgnore]
+    public string AttachmentCompletionDisplay => Result == "전송 요청 완료" ? AttachmentCompletionKind == "user-confirmed" ? "사용자 확인" : "앱 확인" : "";
 }
 
 public class AppDatabase : ExtensibleModel

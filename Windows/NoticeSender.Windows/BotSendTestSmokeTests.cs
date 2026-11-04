@@ -15,6 +15,14 @@ internal static class BotSendTestSmokeTests
 {
     internal static async Task RunAsync()
     {
+        var self = BotSendTestOptions.Parse(new[] { "--self-chat-send-test", "--room", "임세용", "--acknowledge-self-chat", "--report", "self-report.json", "--capture-test-evidence", "--confirm-native-test-files", "--step", "B" });
+        Require(self.Room == "임세용" && self.CaptureEvidence && self.ConfirmNativeBotFiles && !self.ReplaceReviewedBotCue, "명시 나에게 보내기 시험 설정이 다릅니다.");
+        foreach (string wrong in new[] { "임세용 ", "임세용(나에게 보내기)", "다른 사람", "KREAM" })
+            Reject(new[] { "--self-chat-send-test", "--room", wrong, "--acknowledge-self-chat", "--report", "self-report.json" });
+        Reject(new[] { "--self-chat-send-test", "--room", "임세용", "--report", "self-report.json" });
+        Reject(new[] { "--self-chat-send-test", "--room", "임세용", "--acknowledge-self-chat", "--acknowledge-bot-only", "--report", "self-report.json" });
+        Reject(new[] { "--bot-send-test", "--room", "임세용", "--acknowledge-bot-only", "--report", "self-report.json" });
+        Reject(new[] { "--self-chat-send-test", "--room", "임세용", "--acknowledge-self-chat", "--capture-test-evidence", "--replace-reviewed-bot-cue", "--report", "self-report.json" });
         BotSendEvidenceSmokeTests.RunGuards();
         foreach (string mode in new[] { "--demo", "--smoke-test", "--diagnose-kakao", "--dry-run-rooms" })
         {
@@ -32,8 +40,14 @@ internal static class BotSendTestSmokeTests
         Require(BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "카카오톡 선물하기", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files", "--step", "D" }).ConfirmNativeBotFiles, "네이티브 파일 확인 허용 옵션 누락");
         Require(!BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "카카오톡 선물하기", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--step", "D" }).ConfirmNativeBotFiles, "명시 옵션 없이 네이티브 파일 확인 허용");
         Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--confirm-native-bot-files", "--step", "D" });
-        Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files" });
+        var fullNative = BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files" });
+        Require(fullNative.OnlyStep == null && fullNative.ConfirmNativeBotFiles && fullNative.CaptureEvidence, "증거 캡처를 명시한 전체 합성 시험의 네이티브 파일 확인 옵션 거부");
+        Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--confirm-native-bot-files" });
         Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files", "--step", "A" });
+        Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files", "--step", "F" });
+        var koreanNative = BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "카카오톡 선물하기", "--acknowledge-bot-only", "--report", "report.json", "--capture-bot-evidence", "--confirm-native-bot-files", "--step", "E-KOREAN" });
+        Require(koreanNative.OnlyStep == "E-KOREAN" && koreanNative.ConfirmNativeBotFiles, "한글 파일명 합성 시험의 명시 옵션 거부");
+        Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--step", "E-korean" });
         Require(BotSendTestOptions.Parse(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--step", "B" }).OnlyStep == "B", "선택 테스트 단계 무시");
         Reject(new[] { "--bot-send-test", "--room", "KREAM", "--acknowledge-bot-only", "--report", "report.json", "--step", "G" });
         foreach (string room in new[] { "", "KREAM ", "kream", "개인 학생 방" })
@@ -82,12 +96,35 @@ internal static class BotSendTestSmokeTests
                 Require(json.RootElement.GetProperty("mode").GetString() == "bot-send-test" && json.RootElement.GetProperty("completed").GetBoolean(), "최종 봇 JSON 누락");
             Require(snapshots.Count > 6 && snapshots.Any(s => { using var d = JsonDocument.Parse(s); return d.RootElement.GetProperty("successCount").GetInt32() == 1; }), "단계별 봇 JSON 누락");
             Require(result.FullSuitePassed, "전체 테스트와 선택 테스트 구분 누락");
+            Require(result.SyntheticFiles.Count == 6 && result.SyntheticFiles.All(p => !p.EndsWith("-E-한글자료.txt", StringComparison.Ordinal)), "기본 7단계에 선택 한글 첨부 시험이 추가되었습니다.");
 
             fake = new FakeBotClient();
             result = await new BotSendTestRunner(fake, fake).RunAsync("KREAM", true, Path.Combine(folder, "only-B.json"), null, CancellationToken.None, onlyStep: "B");
             artifactFolders.Add(result.ArtifactDirectory!);
             Require(result.Success && !result.FullSuitePassed && result.OnlyStep == "B" && result.RequestedCount == 1 && result.Steps.Single().Id == "B"
                 && fake.Calls.Select(c => c.Operation).SequenceEqual(new[] { "open", "resolve", "resolve", "text", "files", "complete" }), "선택 단계 이외 메시지 전송 / 전체 통과 오판");
+
+            fake = new FakeBotClient();
+            result = await new BotSendTestRunner(fake, fake).RunAsync("카카오톡 선물하기", true, Path.Combine(folder, "only-korean.json"), null, CancellationToken.None, onlyStep: "E-KOREAN");
+            artifactFolders.Add(result.ArtifactDirectory!);
+            Require(result.Success && !result.FullSuitePassed && result.OnlyStep == "E-KOREAN" && result.RequestedCount == 1 && result.Steps.Single().Id == "E-KOREAN", "한글 파일명 단독 시험을 전체 통과로 집계하거나 다른 단계를 실행했습니다.");
+            Require(fake.Calls.Select(c => c.Operation).SequenceEqual(new[] { "open", "resolve", "resolve", "text", "files", "complete" }), "한글 파일명 단독 시험의 전송 순서 / 횟수 변경");
+            string koreanPath = result.SyntheticFiles.Single();
+            string koreanName = "NoticeSender-SYNTHETIC-" + result.TestStamp + "-E-한글자료.txt";
+            Require(Path.GetFileName(koreanPath) == koreanName && result.Steps.Single().AttachmentPaths.SequenceEqual(new[] { koreanPath }) &&
+                fake.Calls.Single(c => c.Operation == "files").Files!.SequenceEqual(new[] { koreanPath }), "정확한 한글 파일명 TXT 한 개 이외의 첨부 전송");
+            byte[] koreanBytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes("NoticeSender synthetic bot-only attachment test. No student data. " + result.TestStamp + " " + koreanName)).ToArray();
+            Require(File.ReadAllBytes(koreanPath).SequenceEqual(koreanBytes), "한글 파일명 합성 TXT의 실제 UTF8 BOM / 원본 문구 바이트가 다릅니다.");
+            fake = new FakeBotClient();
+            bool koreanRejected = false;
+            try { await new BotSendTestRunner(fake, fake).RunAsync("개인 학생 방", true, Path.Combine(folder, "invalid-korean.json"), null, CancellationToken.None, onlyStep: "E-KOREAN"); }
+            catch (ArgumentException) { koreanRejected = true; }
+            Require(koreanRejected && fake.Calls.Count == 0, "한글 파일명 시험이 일반 대화방에 접근했습니다.");
+
+            fake = new FakeBotClient { ManualCompletion = true };
+            result = await new BotSendTestRunner(fake, fake).RunAsync("KREAM", true, Path.Combine(folder, "manual-not-automatic.json"), null, CancellationToken.None, onlyStep: "B");
+            artifactFolders.Add(result.ArtifactDirectory!);
+            Require(!result.Success && result.SuccessCount == 0 && result.Steps.Single().BatchStatus == "확인 필요" && fake.Calls.All(c => c.Operation != "complete"), "사용자 확인 결과를 자동 시험 통과로 처리했습니다.");
 
             fake = new FakeBotClient { FailFirstFiles = true };
             result = await new BotSendTestRunner(fake, fake).RunAsync("지모", true, Path.Combine(folder, "failure.json"), null, CancellationToken.None);
@@ -162,10 +199,12 @@ internal static class BotSendTestSmokeTests
     {
         public BotEvidenceCaptureResult Capture(ChatTarget target, string stage, string artifactDirectory) => throw new InvalidOperationException("합성 증거 캡처 실패");
     }
-    private sealed class FakeBotClient : IChatClient, IDryRunChatClient
+    private sealed class FakeBotClient : IChatClient, IDryRunChatClient, IAttachmentCompletionOutcomeSource
     {
         internal List<FakeCall> Calls { get; } = new();
         internal bool FailFirstFiles { get; init; }
+        internal bool ManualCompletion { get; init; }
+        public AttachmentCompletionOutcome? LastAttachmentCompletion { get; private set; }
         internal Action? AfterText { get; init; }
         internal bool ReadOnlyRoom { get; init; }
         internal int ChangeAtResolve { get; init; }
@@ -183,7 +222,9 @@ internal static class BotSendTestSmokeTests
         public Task SendTextAsync(ChatTarget target, string text, CancellationToken ct)
         { ct.ThrowIfCancellationRequested(); Calls.Add(new("text", text)); AfterText?.Invoke(); return Task.CompletedTask; }
         public Task SendFilesAsync(ChatTarget target, IReadOnlyList<string> files, CancellationToken ct)
-        { ct.ThrowIfCancellationRequested(); Calls.Add(new("files", Files: files.ToArray())); if (FailFirstFiles) throw new InvalidOperationException("합성 파일 테스트 실패"); return Task.CompletedTask; }
+        { ct.ThrowIfCancellationRequested(); Calls.Add(new("files", Files: files.ToArray())); if (FailFirstFiles) throw new InvalidOperationException("합성 파일 테스트 실패");
+            LastAttachmentCompletion = ManualCompletion ? new(Guid.NewGuid(), Guid.NewGuid(), target, files, DateTimeOffset.UtcNow, Path.Combine(Path.GetTempPath(), "synthetic-manual-audit.json")) : null;
+            return Task.CompletedTask; }
         public Task CompleteAsync(ChatTarget target, CancellationToken ct)
         { ct.ThrowIfCancellationRequested(); Calls.Add(new("complete")); return Task.CompletedTask; }
     }
